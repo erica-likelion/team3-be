@@ -16,7 +16,7 @@ public class Restaurant {
     //리뷰 만들 때 외래 키로 사용.
     @Id @Column(name="kakao_place_id", nullable = false) Long kakaoPlaceId;
 
-    @Column(name="resaurant_name")
+    @Column(name="restaurant_name")
     String restaurantName;
 
     @Column(name="category") String category;
@@ -40,7 +40,7 @@ public class Restaurant {
         return kakaoPlaceId;
     }
 
-    public String getName() {
+    public String getRestaurantName() {
         return restaurantName;
     }
 

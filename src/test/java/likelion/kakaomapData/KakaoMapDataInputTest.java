@@ -8,7 +8,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -64,7 +63,7 @@ class KakaoMapDataInputTest {
         // then
         List<Restaurant> all = repository.findAll();
         assertThat(all).isNotEmpty();
-        assertThat(all.get(0).getName()).isEqualTo("테스트 식당");
+        assertThat(all.get(0).getRestaurantName()).isEqualTo("테스트 식당");
     }
 
     @Test
@@ -83,7 +82,7 @@ class KakaoMapDataInputTest {
         // then
         assertThat(repository.count()).isEqualTo(1L);
         var found = repository.findById(dupId).orElseThrow();
-        assertThat(found.getName()).isEqualTo("코이노커피(중복)");
+        assertThat(found.getRestaurantName()).isEqualTo("코이노커피(중복)");
     }
 
     @Test
@@ -112,7 +111,7 @@ class KakaoMapDataInputTest {
         // then
         assertThat(repository.count()).isEqualTo(1L);
         var found = repository.findById(243846109L).orElseThrow();
-        assertThat(found.getName()).isEqualTo("코이노커피(중복)");
+        assertThat(found.getRestaurantName()).isEqualTo("코이노커피(중복)");
         assertThat(found.getRating()).isEqualByComparingTo(new BigDecimal("4.0")); // 마지막 값으로 덮였는지 체크
     }
 }
