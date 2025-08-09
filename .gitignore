@@ -5,6 +5,7 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 .env
+kakao_map_json_file.json
 
 
 ### STS ###
