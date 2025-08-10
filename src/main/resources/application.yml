@@ -18,6 +18,9 @@ spring:
       hibernate:
         format_sql: true
 
+  kakao:
+    api-key: ${KAKAO_API_KEY}
+
 
 logging:
   level:
