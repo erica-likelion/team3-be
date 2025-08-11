@@ -2,13 +2,24 @@ package likelion.jsondata.mapper;
 
 import likelion.domain.entity.Restaurant;
 import likelion.jsondata.record.RestaurantJson;
+import likelion.service.kakaoApi.KakaoApiService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 
 @Component
 public class RestaurantMapper {
+
+    @Autowired
+    private KakaoApiService kakaoApiService;
+
     public Restaurant map(RestaurantJson j){
+        String numberAddress = j.지번();
+        double[] location = getLocationFromAddress(numberAddress);
+        double latitude = location[0];
+        double longitude = location[1];
+
         Restaurant r = new Restaurant();
         r.setRestaurantName(nvl(j.가게이름()));
         r.setCategory(j.카테고리());
@@ -21,8 +32,25 @@ public class RestaurantMapper {
         r.setRoadAddress(j.주소());
         r.setKakaoPlaceId(makeKakaoId(j.상세정보링크()));
 
+        // 위도, 경도 설정
+        r.setLatitude(latitude);
+        r.setLongitude(longitude);
+
         return r;
     }
+
+    private double[] getLocationFromAddress(String numberAddr) {
+        //카카오 API를 호출 -> x, y 위도경도 가져옴
+        String result = kakaoApiService.getLocationByAddress(numberAddr);
+
+        //위도 경도 배열에 ㄱㄱ
+        String[] resultArray = result.split(",");
+        double latitude = Double.parseDouble(resultArray[0].trim());
+        double longitude = Double.parseDouble(resultArray[1].trim());
+
+        return new double[] {latitude, longitude};
+    }
+
 
     private Long makeKakaoId(String url){
         return Long.valueOf(url.replaceAll("\\D+",""));

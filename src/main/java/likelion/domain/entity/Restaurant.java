@@ -36,6 +36,28 @@ public class Restaurant {
 
     @Column(name="kakao_url") String kakaoUrl;
 
+    @Column(name = "latitude")
+    Double latitude; //위도 추가
+
+    @Column(name = "longitude")
+    Double longitude; //경도 추가
+
+    public Double getLatitude() {
+        return latitude;
+    }
+
+    public void setLatitude(Double latitude) {
+        this.latitude = latitude;
+    }
+
+    public Double getLongitude() {
+        return longitude;
+    }
+
+    public void setLongitude(Double longitude) {
+        this.longitude = longitude;
+    }
+
     public Long getKakaoPlaceId() {
         return kakaoPlaceId;
     }
