@@ -19,7 +19,7 @@ public class RestaurantService {
         // 모든 음식점 조회
         List<Restaurant> allRestaurants = restaurantRepository.findAll();
 
-        // 300m 이내에 있는 음식점만 필터링
+        //반경 이내에 있는 음식점만 필터링
         return allRestaurants.stream()
                 .filter(restaurant -> {
                     double distance = DistanceCalc.calculateDistance(
