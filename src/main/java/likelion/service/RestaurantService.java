@@ -6,6 +6,7 @@ import likelion.service.distance.DistanceCalc;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -14,6 +15,11 @@ public class RestaurantService {
 
     @Autowired
     private RestaurantRepository restaurantRepository;
+
+    public List<Restaurant> getFilteredRestaurant(double latitude, double longitude){
+
+        return getRestaurantsWithinRadius(latitude, longitude);
+    }
 
     public List<Restaurant> getRestaurantsWithinRadius(double latitude, double longitude) {
         // 모든 음식점 조회
