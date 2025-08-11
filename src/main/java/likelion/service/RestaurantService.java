@@ -26,7 +26,11 @@ public class RestaurantService {
                             latitude, longitude,
                             restaurant.getLatitude(), restaurant.getLongitude()
                     );
-                    return distance <= 50; // 300m 이내인 경우만
+                    /**
+                     * 수정하면서 결과 보고 반영해야.
+                     * 100미터 이상이면 결과값이 너무 많음
+                     */
+                    return distance <= 50;
                 })
                 .collect(Collectors.toList());
     }
