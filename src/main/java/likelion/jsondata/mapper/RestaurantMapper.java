@@ -15,8 +15,8 @@ public class RestaurantMapper {
     private KakaoApiService kakaoApiService;
 
     public Restaurant map(RestaurantJson j){
-        String address = j.주소();
-        double[] location = getLocationFromAddress(address);
+        String numberAddress = j.지번();
+        double[] location = getLocationFromAddress(numberAddress);
         double latitude = location[0];
         double longitude = location[1];
 
@@ -39,9 +39,9 @@ public class RestaurantMapper {
         return r;
     }
 
-    private double[] getLocationFromAddress(String address) {
+    private double[] getLocationFromAddress(String numberAddr) {
         //카카오 API를 호출 -> x, y 위도경도 가져옴
-        String result = kakaoApiService.getLocationByAddress(address);
+        String result = kakaoApiService.getLocationByAddress(numberAddr);
 
         //위도 경도 배열에 ㄱㄱ
         String[] resultArray = result.split(",");
