@@ -36,7 +36,7 @@ public class RestaurantService {
                      * 수정하면서 결과 보고 반영해야.
                      * 100미터 이상이면 결과값이 너무 많음
                      */
-                    return distance <= 50;
+                    return distance <= 200;
                 })
                 .collect(Collectors.toList());
     }

@@ -20,7 +20,7 @@ public class RestaurantController {
     @Autowired
     private RestaurantService restaurantService;
 
-    @GetMapping("analysis")
+    @GetMapping("datatest") // url 변경했습니다
     public List<Restaurant> getRestaurantsWithinRadius(
             @RequestParam double latitude,
             @RequestParam double longitude) {
