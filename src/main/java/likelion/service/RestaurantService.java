@@ -21,5 +21,6 @@ public class RestaurantService {
     public List<Restaurant> getFilteredRestaurant(double latitude, double longitude) {
         int radiusMeters = 50;
         return restaurantRepository.findRestaurantsWithinRadius(latitude, longitude, radiusMeters);
+
     }
 }
