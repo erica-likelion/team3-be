@@ -22,8 +22,8 @@ public class SeedRunner implements CommandLineRunner {
 
     @Override
     public void run(String... args) throws Exception{
-        if(args.length==0) return;
-        Path path = Paths.get(args[0]);
+        if (args.length < 2 || !"restaurants".equalsIgnoreCase(args[0])) return;
+        Path path = Paths.get(args[1]);
         RestaurantJson[] arr = om.readValue(Files.readAllBytes(path), RestaurantJson[].class);
         //중복 기준은 PK 그 url 짤라서 만든 거
         for(RestaurantJson j : arr){
