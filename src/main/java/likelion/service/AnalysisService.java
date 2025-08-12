@@ -66,7 +66,7 @@ public class AnalysisService {
             List<AnalysisResponse.ScoreInfo> scores = calculateAllScores(request, nearbyRestaurants, priceData);
 
             // 2차 AI 호출: 실제 분석
-            String finalPrompt = createFinalReportPrompt(request, scores, priceData);
+            String finalPrompt = createFinalReportPrompt(request, scores, priceData, nearbyReviews);
             String aiFinalResponseJson = aiChatService.getAnalysisResponseFromAI(finalPrompt);
 
             // AI 응답 정리 및 최종 반환
@@ -75,7 +75,7 @@ public class AnalysisService {
 
         } catch (IOException e) {
             e.printStackTrace();
-            return new AnalysisResponse(List.of(), List.of());
+            return new AnalysisResponse(List.of(), null, List.of());
         }
     }
 
@@ -134,25 +134,39 @@ public class AnalysisService {
         return scores;
     }
 
-    private String createFinalReportPrompt(AnalysisRequest request, List<AnalysisResponse.ScoreInfo> scores, AiPriceResponse priceData) {
+    private String createFinalReportPrompt(AnalysisRequest request, List<AnalysisResponse.ScoreInfo> scores, AiPriceResponse priceData, List<Review> reviews) {
         String scoreInfoForPrompt = scores.stream()
                 .map(s -> String.format("- %s: %d점", s.name(), s.score()))
                 .collect(Collectors.joining("\n"));
         String priceInfoForPrompt = priceData.prices().stream()
                 .map(p -> String.format("- %s(%s): %d원", p.restaurantName(), p.representativeMenu(), p.price()))
                 .collect(Collectors.joining("\n"));
+
+        // 리뷰 데이터가 없을 경우도 처리
+        String reviewInfoForPrompt;
+        if (reviews.isEmpty()) {
+            reviewInfoForPrompt = "분석에 참고할 만한 주변 가게의 리뷰 데이터가 없습니다.";
+        } else {
+            reviewInfoForPrompt = reviews.stream()
+                    .limit(20) // 일단 20개로 제한
+                    .map(r -> String.format("- [%s] \"%s\" (평점: %s)",
+                            r.getRestaurant().getRestaurantName(), r.getContent(), r.getRating().toString()))
+                    .collect(Collectors.joining("\n"));
+        }
+
         return String.format(
                 """
                 # 역할: 당신은 뛰어난 상권 분석 보고서 작성가입니다.
-                # 임무: 내가 계산한 점수와 데이터를 바탕으로, 각 점수에 대한 설득력 있는 '이유(reason)'와 최종 '조언(tips)'을 작성하여 완벽한 JSON 보고서를 완성해주세요.
+                # 임무: 내가 제공하는 모든 데이터를 바탕으로, 완벽한 JSON 보고서를 완성해주세요.
 
                 # 창업 희망 조건
                 - 희망 위치: 좌표(%s)
                 - 희망 업종: %s
-                - 희망 월세 예산: %d만원 ~ %d만원
-                - 희망 메뉴 평균 가격: %d원 ~ %d원
-
-                # 내가 분석한 주변 상권의 대표 메뉴 및 가격
+                
+                # 내가 분석한 주변 상권 데이터
+                - 주변 가게 메뉴 및 가격:
+                %s
+                - 주변 가게 실제 고객 리뷰 (최대 20개):
                 %s
 
                 # 내가 계산한 최종 점수
@@ -160,9 +174,10 @@ public class AnalysisService {
 
                 # 지시사항
                 1. '내가 계산한 최종 점수'의 각 항목에 대해 설득력 있는 '이유(reason)'를 작성해주세요.
-                2. '예산 적합성' 점수에 대해 'expectedPrice' 객체에 예상 월세와 보증금을 **반드시 숫자(Integer)로만** 추정하여 채워주세요.
-                3. 모든 정보를 종합하여 날카로운 조언('tips')을 3가지 생성해주세요.
-                4. 최종 결과물을 아래 JSON 형식에 맞춰서 반환해주세요. 순수한 JSON 텍스트만 반환해야 합니다.
+                2. '예산 적합성' 점수에 대해 'expectedPrice' 객체에 예상 월세와 보증금을 추정하여 채워주세요. (단위 없이 숫자만)
+                3. **'주변 가게 실제 고객 리뷰'를 심층 분석하여 `reviewAnalysis` 객체를 생성해주세요.** 만약 리뷰 데이터가 없다면, `summary`에 "주변 가게의 리뷰 데이터가 부족하여 상세 분석을 제공할 수 없습니다." 라는 안내 문구를 넣고 나머지는 빈 값으로 채워주세요.
+                4. **모든 정보를 종합하여, 특히 리뷰에서 발견된 내용을 바탕으로** 날카로운 조언('tips')을 3가지 생성해주세요.
+                5. 최종 결과물을 아래 JSON 형식에 맞춰서 반환해주세요. 순수한 JSON 텍스트만 반환해야 합니다.
 
                 # 출력 형식 (JSON)
                 {
@@ -171,6 +186,14 @@ public class AnalysisService {
                     { "name": "가격", "score": %d, "expectedPrice": null, "reason": "이곳에 이유 작성..." },
                     { "name": "예산 적합성", "score": %d, "expectedPrice": { "monthly": (추정 월세), "securityDeposit": (추정 보증금) }, "reason": "이곳에 이유 작성..." }
                   ],
+                  "reviewAnalysis": {
+                    "summary": "리뷰 데이터를 종합하여 요약문 작성...",
+                    "positiveKeywords": ["키워드1", "키워드2"],
+                    "negativeKeywords": ["키워드3", "키워드4"],
+                    "reviewSamples": [
+                      { "storeName": "(리뷰에 나온 가게 이름)", "reviewScore": 4.5, "highlights": ["리뷰에서 찾은 장점1", "장점2"] }
+                    ]
+                  },
                   "tips": [
                     { "type": "success", "message": "성공 요인 조언 작성..." },
                     { "type": "warning", "message": "주의할 점 조언 작성..." },
@@ -178,9 +201,9 @@ public class AnalysisService {
                   ]
                 }
                 """,
-                request.addr(), request.category(), request.budget().min(), request.budget().max(),
-                request.averagePrice().min(), request.averagePrice().max(),
+                request.addr(), request.category(),
                 priceInfoForPrompt,
+                reviewInfoForPrompt,
                 scoreInfoForPrompt,
                 scores.get(0).score(), scores.get(1).score(), scores.get(2).score()
         );
