@@ -17,5 +17,7 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
         order by v.id desc
     """)
     List<Review> findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(@Param("placeIds") Collection<Long> placeIds);
+
+    Optional<Review> findByRestaurant_KakaoPlaceIdAndSourceReviewId(Long placeId, String sourceId);
 }
 
