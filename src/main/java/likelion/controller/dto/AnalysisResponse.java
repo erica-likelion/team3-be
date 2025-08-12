@@ -1,32 +1,27 @@
 package likelion.controller.dto;
 
 import java.util.List;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 public record AnalysisResponse(
-        // "접근성", "가격" 등 각 항목별 점수 정보 리스트
         List<ScoreInfo> scores,
-
-        // 주변 경쟁 가게들의 리뷰를 분석한  (추후 추가 예정)
-        // ReviewAnalysis reviewAnalysis,
-
-        // 성공/경고/정보 메시지 리스트
         List<Tip> tips
 ) {
+    @JsonInclude(JsonInclude.Include.NON_NULL) // expectedPrice가 예산 적합성에만 쓰이는데 나머지는 null임. 그래서 null인 것들은 안 보여주기 위한 어노테이션
     public record ScoreInfo(
             String name,
             int score,
+            ExpectedPrice expectedPrice,
             String reason
     ) {}
 
-//    나중에 리뷰 데이터 받으면 주석 풀고 다듬어서 만들겠습니다
-//    public record ReviewAnalysis(
-//            String summary,
-//            List<String> positiveKeywords,
-//            List<String> negativeKeywords
-//    ) {}
+    public record ExpectedPrice(
+            Integer monthly,
+            Integer securityDeposit
+    ) {}
 
     public record Tip(
-            String type, // "success", "warning", "info" 등 팁의 종류랄까.. 노션 api명세서 response부분 보시면 뭔지 알겁니다!
+            String type,
             String message
     ) {}
 }

@@ -5,12 +5,12 @@ package likelion.controller.dto;
  * 유저의 창업 조건을 담기
  */
 public record AnalysisRequest(
-        String addr, // "안산시 상록구 사동"
+        String addr, // "37.297,126.837" 같은 위경도 문자열
         String category, // "중식","카페"
         String marketingArea, // 대학가/학교 주변
-        MinMax budget, // 만원
+        MinMax budget, // 만원. 월세 예산
         String managementMethod, // "홀 영업 위주"
-        MinMax averagePrice, // 원
+        MinMax averagePrice, // 원. 메뉴 가격
         MinMax size, // 평
         Integer height // 층
 ){
