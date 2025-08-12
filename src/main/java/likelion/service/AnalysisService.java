@@ -5,12 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import likelion.controller.dto.AnalysisRequest;
 import likelion.controller.dto.AnalysisResponse;
 import likelion.domain.entity.Restaurant;
+import likelion.domain.entity.Review;
 import likelion.repository.RestaurantRepository;
+import likelion.repository.ReviewRepository;
+import likelion.service.distance.DistanceCalc;
 import likelion.service.dto.AiPriceResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import likelion.domain.entity.Review;
-import likelion.repository.ReviewRepository;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -22,36 +23,42 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AnalysisService {
 
+    // ★★★ 2. RestaurantService 대신 RestaurantRepository를 정확하게 주입받습니다. ★★★
     private final RestaurantRepository restaurantRepository;
+    private final ReviewRepository reviewRepository;
     private final AiChatService aiChatService;
     private final ObjectMapper objectMapper;
-    private final ReviewRepository reviewRepository;
 
     public AnalysisResponse analyze(AnalysisRequest request) {
-        //addr 변수에 담긴 위도/경도 문자열을 직접 파싱
+        // addr 변수에 담긴 위도/경도 문자열을 직접 파싱
         String[] locationParts = request.addr().split(",");
         double latitude = Double.parseDouble(locationParts[0].trim());
         double longitude = Double.parseDouble(locationParts[1].trim());
 
-        //해석한 위도, 경도를 사용해서 주변 가게를 찾기
-        List<Restaurant> nearbyRestaurants = restaurantRepository.findRestaurantsWithinRadius(latitude, longitude, 200);
+        // ★★★ 3. DB에서 모든 가게를 가져와 서버에서 직접 필터링하는 안정적인 방식으로 수정했습니다. ★★★
+        List<Restaurant> allRestaurants = restaurantRepository.findAll();
+        List<Restaurant> nearbyRestaurants = allRestaurants.stream()
+                .filter(restaurant -> {
+                    double distance = DistanceCalc.calculateDistance(
+                            latitude, longitude,
+                            restaurant.getLatitude(), restaurant.getLongitude()
+                    );
+                    return distance <= 500; // 500미터 반경으로 필터링
+                })
+                .collect(Collectors.toList());
+
 
         // 주변 가게들의 리뷰 데이터 가져오기
-        // 주변 가게가 없다면 빈 리스트를 사용합니다.
         List<Review> nearbyReviews = new ArrayList<>();
         if (!nearbyRestaurants.isEmpty()) {
-            // 주변 가게들의 고유 ID만 추출
             List<Long> nearbyRestaurantIds = nearbyRestaurants.stream()
                     .map(Restaurant::getKakaoPlaceId)
                     .collect(Collectors.toList());
-            // 추출한 ID 목록으로 모든 관련 리뷰를 한 번에 조회
             nearbyReviews = reviewRepository.findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(nearbyRestaurantIds);
         }
 
-        // (임시) 리뷰가 잘 조회되었는지 콘솔에 출력해서 확인
         System.out.println("===== 주변 가게 리뷰 " + nearbyReviews.size() + "건 조회 완료! =====");
         nearbyReviews.stream()
-                .limit(5) // 너무 많으니 5개만 미리보기
                 .forEach(review -> System.out.println(
                         "[" + review.getRestaurant().getRestaurantName() + "] " + review.getContent()
                 ));
@@ -62,10 +69,10 @@ public class AnalysisService {
             // 1차 AI 호출: 주변 식당 가격 정보 수집
             AiPriceResponse priceData = getPriceDataFromAi(nearbyRestaurants);
 
-            // 서버가 직접 점수 계산. (계산 로직 및 점수 기준은 바꿔야됨 지금 너무 엉터리 ㅋ.)
+            // 서버가 직접 점수 계산
             List<AnalysisResponse.ScoreInfo> scores = calculateAllScores(request, nearbyRestaurants, priceData);
 
-            // 2차 AI 호출: 실제 분석
+            // 2차 AI 호출: 실제 분석 리포트 작성 요청
             String finalPrompt = createFinalReportPrompt(request, scores, priceData, nearbyReviews);
             String aiFinalResponseJson = aiChatService.getAnalysisResponseFromAI(finalPrompt);
 
@@ -86,10 +93,14 @@ public class AnalysisService {
                 .collect(Collectors.joining("\n"));
         String prompt = String.format(
                 """
-                # 역할: 당신은 상권 데이터 분석가입니다.
-                # 임무: 아래 식당 목록을 보고, 각 식당의 대표 메뉴와 평균적인 1인분 가격을 추론하여 JSON으로 반환하세요.
+                # 역할: 당신은 JSON 데이터만 생성하는 로봇입니다.
+                # 임무: 아래 식당 목록을 보고, 각 식당의 대표 메뉴와 평균 1인분 가격을 추론하여 JSON으로 반환하세요.
                 # 분석 대상 식당 목록:\n%s
-                # 지시사항: 가격은 반드시 숫자로만 제공하고, 정보가 부족하면 목록에서 제외하세요. 다른 설명 없이, 순수한 JSON 텍스트만 반환해야 합니다.
+                # 절대 규칙:
+                - `price` 필드의 값은 반드시 따옴표 없는 숫자(Integer)여야 합니다. (예: 12000)
+                - `restaurantName`, `representativeMenu` 필드의 값은 반드시 따옴표로 감싸진 문자열(String)이어야 합니다.
+                - Markdown 코드 블록(```json)이나 다른 설명 없이, 순수한 JSON 텍스트만 응답해야 합니다.
+
                 # 출력 형식 (JSON):
                 {
                   "prices": [
@@ -97,6 +108,7 @@ public class AnalysisService {
                   ]
                 }
                 """, nearbyInfo);
+
         String aiResponseJson = aiChatService.getAnalysisResponseFromAI(prompt);
         String cleanJson = aiResponseJson.replace("```json", "").replace("```", "").trim();
         return objectMapper.readValue(cleanJson, AiPriceResponse.class);
@@ -142,13 +154,12 @@ public class AnalysisService {
                 .map(p -> String.format("- %s(%s): %d원", p.restaurantName(), p.representativeMenu(), p.price()))
                 .collect(Collectors.joining("\n"));
 
-        // 리뷰 데이터가 없을 경우도 처리
         String reviewInfoForPrompt;
         if (reviews.isEmpty()) {
             reviewInfoForPrompt = "분석에 참고할 만한 주변 가게의 리뷰 데이터가 없습니다.";
         } else {
             reviewInfoForPrompt = reviews.stream()
-                    .limit(20) // 일단 20개로 제한
+                    .limit(20)
                     .map(r -> String.format("- [%s] \"%s\" (평점: %s)",
                             r.getRestaurant().getRestaurantName(), r.getContent(), r.getRating().toString()))
                     .collect(Collectors.joining("\n"));
@@ -156,7 +167,7 @@ public class AnalysisService {
 
         return String.format(
                 """
-                # 역할: 당신은 뛰어난 상권 분석 보고서 작성가입니다.
+                # 역할: 당신은 JSON 데이터만 생성하는 보고서 작성 로봇입니다.
                 # 임무: 내가 제공하는 모든 데이터를 바탕으로, 완벽한 JSON 보고서를 완성해주세요.
 
                 # 창업 희망 조건
@@ -172,19 +183,24 @@ public class AnalysisService {
                 # 내가 계산한 최종 점수
                 %s
 
+                # 절대 규칙:
+                - `score`, `monthly`, `securityDeposit` 필드의 값은 반드시 따옴표 없는 숫자(Integer)여야 합니다.
+                - `expectedPrice` 객체 안의 값에는 절대 '만원', '원' 같은 단위를 포함하지 마세요.
+                - 모든 텍스트 값은 반드시 따옴표로 감싸진 문자열(String)이어야 합니다.
+                - Markdown 코드 블록(```json)이나 다른 설명 없이, 순수한 JSON 텍스트만 응답해야 합니다.
+
                 # 지시사항
                 1. '내가 계산한 최종 점수'의 각 항목에 대해 설득력 있는 '이유(reason)'를 작성해주세요.
-                2. '예산 적합성' 점수에 대해 'expectedPrice' 객체에 예상 월세와 보증금을 추정하여 채워주세요. (단위 없이 숫자만)
-                3. **'주변 가게 실제 고객 리뷰'를 심층 분석하여 `reviewAnalysis` 객체를 생성해주세요.** 만약 리뷰 데이터가 없다면, `summary`에 "주변 가게의 리뷰 데이터가 부족하여 상세 분석을 제공할 수 없습니다." 라는 안내 문구를 넣고 나머지는 빈 값으로 채워주세요.
-                4. **모든 정보를 종합하여, 특히 리뷰에서 발견된 내용을 바탕으로** 날카로운 조언('tips')을 3가지 생성해주세요.
-                5. 최종 결과물을 아래 JSON 형식에 맞춰서 반환해주세요. 순수한 JSON 텍스트만 반환해야 합니다.
+                2. '예산 적합성' 점수에 대해 'expectedPrice' 객체에 예상 월세와 보증금을 추정하여 채워주세요.
+                3. '주변 가게 실제 고객 리뷰'를 심층 분석하여 `reviewAnalysis` 객체를 생성해주세요.
+                4. 모든 정보를 종합하여 날카로운 조언('tips')을 3가지 생성해주세요.
 
-                # 출력 형식 (JSON)
+                # 출력 형식 (JSON):
                 {
                   "scores": [
                     { "name": "위치", "score": %d, "expectedPrice": null, "reason": "이곳에 이유 작성..." },
                     { "name": "가격", "score": %d, "expectedPrice": null, "reason": "이곳에 이유 작성..." },
-                    { "name": "예산 적합성", "score": %d, "expectedPrice": { "monthly": (추정 월세), "securityDeposit": (추정 보증금) }, "reason": "이곳에 이유 작성..." }
+                    { "name": "예산 적합성", "score": %d, "expectedPrice": { "monthly": (숫자 월세), "securityDeposit": (숫자 보증금) }, "reason": "이곳에 이유 작성..." }
                   ],
                   "reviewAnalysis": {
                     "summary": "리뷰 데이터를 종합하여 요약문 작성...",
