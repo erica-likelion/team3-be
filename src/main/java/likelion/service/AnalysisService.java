@@ -9,6 +9,8 @@ import likelion.repository.RestaurantRepository;
 import likelion.service.dto.AiPriceResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import likelion.domain.entity.Review;
+import likelion.repository.ReviewRepository;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -23,6 +25,7 @@ public class AnalysisService {
     private final RestaurantRepository restaurantRepository;
     private final AiChatService aiChatService;
     private final ObjectMapper objectMapper;
+    private final ReviewRepository reviewRepository;
 
     public AnalysisResponse analyze(AnalysisRequest request) {
         //addr 변수에 담긴 위도/경도 문자열을 직접 파싱
@@ -31,7 +34,29 @@ public class AnalysisService {
         double longitude = Double.parseDouble(locationParts[1].trim());
 
         //해석한 위도, 경도를 사용해서 주변 가게를 찾기
-        List<Restaurant> nearbyRestaurants = restaurantRepository.findRestaurantsWithinRadius(latitude, longitude, 50);
+        List<Restaurant> nearbyRestaurants = restaurantRepository.findRestaurantsWithinRadius(latitude, longitude, 200);
+
+        // 주변 가게들의 리뷰 데이터 가져오기
+        // 주변 가게가 없다면 빈 리스트를 사용합니다.
+        List<Review> nearbyReviews = new ArrayList<>();
+        if (!nearbyRestaurants.isEmpty()) {
+            // 주변 가게들의 고유 ID만 추출
+            List<Long> nearbyRestaurantIds = nearbyRestaurants.stream()
+                    .map(Restaurant::getKakaoPlaceId)
+                    .collect(Collectors.toList());
+            // 추출한 ID 목록으로 모든 관련 리뷰를 한 번에 조회
+            nearbyReviews = reviewRepository.findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(nearbyRestaurantIds);
+        }
+
+        // (임시) 리뷰가 잘 조회되었는지 콘솔에 출력해서 확인
+        System.out.println("===== 주변 가게 리뷰 " + nearbyReviews.size() + "건 조회 완료! =====");
+        nearbyReviews.stream()
+                .limit(5) // 너무 많으니 5개만 미리보기
+                .forEach(review -> System.out.println(
+                        "[" + review.getRestaurant().getRestaurantName() + "] " + review.getContent()
+                ));
+        System.out.println("==========================================");
+
 
         try {
             // 1차 AI 호출: 주변 식당 가격 정보 수집
