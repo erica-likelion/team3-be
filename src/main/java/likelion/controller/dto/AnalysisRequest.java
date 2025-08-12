@@ -1,0 +1,22 @@
+package likelion.controller.dto;
+
+/**
+ * 프론트엔드에서 상권 분석을 요청할 때 사용하는 DTO
+ * 유저의 창업 조건을 담기
+ */
+public record AnalysisRequest(
+        String addr, // "안산시 상록구 사동"
+        String category, // "중식","카페"
+        String marketingArea, // 대학가/학교 주변
+        MinMax budget, // 만원
+        String managementMethod, // "홀 영업 위주"
+        MinMax averagePrice, // 원
+        MinMax size, // 평
+        Integer height // 층
+){
+    /**
+     * 최소값과 최대값으로 범위를 나타내기 위해 만든 것
+     * budget, averagePrice, size 필드에서 사용
+     */
+    public record MinMax(Integer min, Integer max) {}
+}
