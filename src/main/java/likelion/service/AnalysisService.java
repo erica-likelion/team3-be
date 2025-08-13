@@ -12,6 +12,8 @@ import likelion.service.distance.DistanceCalc;
 import likelion.service.dto.AiPriceResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+// import likelion.domain.entity.RealEstate; // 아직 사용하지 않으므로 주석 처리
+// import likelion.repository.RealEstateRepository; // 아직 사용하지 않으므로 주석 처리
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -23,10 +25,12 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AnalysisService {
 
+    // ★★★ 2. RestaurantService 대신 RestaurantRepository를 정확하게 주입받습니다. ★★★
     private final RestaurantRepository restaurantRepository;
     private final ReviewRepository reviewRepository;
     private final AiChatService aiChatService;
     private final ObjectMapper objectMapper;
+    // private final RealEstateRepository realEstateRepository; // 아직 사용하지 않으므로 주석 처리
 
     public AnalysisResponse analyze(AnalysisRequest request) {
         // addr 변수에 담긴 위도/경도 문자열을 직접 파싱
@@ -34,26 +38,15 @@ public class AnalysisService {
         double latitude = Double.parseDouble(locationParts[0].trim());
         double longitude = Double.parseDouble(locationParts[1].trim());
 
-        // DB에서 모든 가게를 가져와 서버에서 직접 필터링하는 방식으로 수정
+        // DB에서 모든 가게를 가져와 서버에서 직접 필터링하는 안정적인 방식으로 수정
         List<Restaurant> allRestaurants = restaurantRepository.findAll();
-
-//        DB에서 가져온 가게들의 위도 경도가 잘 전달이 되는지 확인용 디버깅 코드(혹시 모르니 남겨놓음)
-//        System.out.println("===== DB에서 가져온 가게 좌표 샘플 확인 =====");
-//        allRestaurants.stream().limit(10).forEach(r ->
-//                System.out.println(String.format("가게: %s, 위도: %f, 경도: %f",
-//                        r.getRestaurantName(), r.getLatitude(), r.getLongitude()))
-//        );
-//        System.out.println("=========================================");
-
         List<Restaurant> nearbyRestaurants = allRestaurants.stream()
                 .filter(restaurant -> {
                     double distance = DistanceCalc.calculateDistance(
                             latitude, longitude,
                             restaurant.getLatitude(), restaurant.getLongitude()
                     );
-                    // 거리 계산 잘 되고있는지 디버깅용 코드 (혹시 모르니 남겨둠)
-                    // System.out.println(String.format("거리 계산: %s까지 %.2f 미터", restaurant.getRestaurantName(), distance));
-                    return distance <= 50; // 200미터 반경으로 필터링
+                    return distance <= 50; // 50미터 반경으로 필터링
                 })
                 .collect(Collectors.toList());
 
@@ -68,8 +61,8 @@ public class AnalysisService {
         }
 
 
-//        위에서 1차로 들어온 주변 가게의 리뷰들 잘 가져오는지 디버깅 코드(일단 남겨놓음)
-//        System.out.println("===== 주변 가게 리뷰 " + nearbyReviews.size() + "건 조회됨 =====");
+//        리뷰 데이터 가져오나 콘솔 확인용 코드
+//        System.out.println("===== 주변 가게 리뷰 " + nearbyReviews.size() + "건 조회 =====");
 //        nearbyReviews.stream()
 //                .forEach(review -> System.out.println(
 //                        "[" + review.getRestaurant().getRestaurantName() + "] " + review.getContent()
@@ -126,13 +119,17 @@ public class AnalysisService {
         return objectMapper.readValue(cleanJson, AiPriceResponse.class);
     }
 
+    // 점수 계산 로직들
     private List<AnalysisResponse.ScoreInfo> calculateAllScores(AnalysisRequest request, List<Restaurant> nearbyRestaurants, AiPriceResponse priceData) {
         List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
         int nearbyCount = nearbyRestaurants.size();
+
+        // 1번 항목: 위치 적합성 점수
         int locationScore = 50 + (nearbyCount * 2);
         if (locationScore > 95) locationScore = 95;
         scores.add(new AnalysisResponse.ScoreInfo("위치", locationScore, null, ""));
 
+        // 2번 항목: 가격 적합성 점수
         OptionalDouble avgCompetitorPriceOpt = priceData.prices().stream()
                 .mapToInt(AiPriceResponse.RestaurantPriceInfo::price)
                 .average();
@@ -151,6 +148,7 @@ public class AnalysisService {
         if (priceScore > 95) priceScore = 95;
         scores.add(new AnalysisResponse.ScoreInfo("가격", priceScore, null, ""));
 
+        // 3번 항목: 예산(임대료/월세) 적합성 점수
         int budgetScore = 100 - (locationScore / 2);
         if (request.budget().max() > 200) budgetScore += 10;
         if (budgetScore > 95) budgetScore = 95;
@@ -158,6 +156,7 @@ public class AnalysisService {
         return scores;
     }
 
+    // 최종 ai에 보낼 프롬프트 관련
     private String createFinalReportPrompt(AnalysisRequest request, List<AnalysisResponse.ScoreInfo> scores, AiPriceResponse priceData, List<Review> reviews) {
         String scoreInfoForPrompt = scores.stream()
                 .map(s -> String.format("- %s: %d점", s.name(), s.score()))
