@@ -1,5 +1,45 @@
+spring:
+  profiles:
+    active: blue
+    group:
+      local: local, common
+      blue: blue, common
+      green: green, common
+
+server:
+  env: blue
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
 server:
   port: 8080
+  serverAddress: localhost
+serverName: local_server
+
+---
+spring:
+  config:
+    activate:
+      on-profile: blue
+server:
+  port: 8080
+  serverAddress: ${AWS_PUBLIC_IP}
+serverName: blue_server
+
+---
+spring:
+  config:
+    activate:
+      on-profile: green
+server:
+  port: 8081
+  serverAddress: ${AWS_PUBLIC_IP}
+serverName: green_server
+
+---
 
 spring:
   application:
@@ -9,7 +49,6 @@ spring:
     url: ${DB_URL}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
-
   jpa:
     hibernate:
       ddl-auto: update
@@ -17,10 +56,8 @@ spring:
     properties:
       hibernate:
         format_sql: true
-
   kakao:
     api-key: ${KAKAO_API_KEY}
-
 
 logging:
   level:
@@ -28,3 +65,14 @@ logging:
 
 openai:
   api-key: ${OPENAI_API_KEY}
+
+#헬스체크
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info"
+  endpoint:
+    health:
+      probes:
+        enabled: true
