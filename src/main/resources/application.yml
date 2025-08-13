@@ -25,3 +25,6 @@ spring:
 logging:
   level:
     org.springframework: INFO
+
+openai:
+  api-key: ${OPENAI_API_KEY}
