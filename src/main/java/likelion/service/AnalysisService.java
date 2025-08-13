@@ -94,7 +94,7 @@ public class AnalysisService {
 
         } catch (IOException e) {
             e.printStackTrace();
-            return new AnalysisResponse(List.of(), null, List.of());
+            return new AnalysisResponse(List.of(), null, List.of(), null);
         }
     }
 

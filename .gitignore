@@ -7,6 +7,7 @@ build/
 .env
 kakao_map_json_file.json
 kakaomap_review.json
+real_estate_data.json
 
 ### STS ###
 .apt_generated
