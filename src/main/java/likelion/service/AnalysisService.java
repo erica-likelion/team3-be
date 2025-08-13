@@ -23,7 +23,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AnalysisService {
 
-    // ★★★ 2. RestaurantService 대신 RestaurantRepository를 정확하게 주입받습니다. ★★★
     private final RestaurantRepository restaurantRepository;
     private final ReviewRepository reviewRepository;
     private final AiChatService aiChatService;
@@ -35,15 +34,26 @@ public class AnalysisService {
         double latitude = Double.parseDouble(locationParts[0].trim());
         double longitude = Double.parseDouble(locationParts[1].trim());
 
-        // ★★★ 3. DB에서 모든 가게를 가져와 서버에서 직접 필터링하는 안정적인 방식으로 수정했습니다. ★★★
+        // DB에서 모든 가게를 가져와 서버에서 직접 필터링하는 방식으로 수정
         List<Restaurant> allRestaurants = restaurantRepository.findAll();
+
+//        DB에서 가져온 가게들의 위도 경도가 잘 전달이 되는지 확인용 디버깅 코드(혹시 모르니 남겨놓음)
+//        System.out.println("===== DB에서 가져온 가게 좌표 샘플 확인 =====");
+//        allRestaurants.stream().limit(10).forEach(r ->
+//                System.out.println(String.format("가게: %s, 위도: %f, 경도: %f",
+//                        r.getRestaurantName(), r.getLatitude(), r.getLongitude()))
+//        );
+//        System.out.println("=========================================");
+
         List<Restaurant> nearbyRestaurants = allRestaurants.stream()
                 .filter(restaurant -> {
                     double distance = DistanceCalc.calculateDistance(
                             latitude, longitude,
                             restaurant.getLatitude(), restaurant.getLongitude()
                     );
-                    return distance <= 500; // 500미터 반경으로 필터링
+                    // 거리 계산 잘 되고있는지 디버깅용 코드 (혹시 모르니 남겨둠)
+                    // System.out.println(String.format("거리 계산: %s까지 %.2f 미터", restaurant.getRestaurantName(), distance));
+                    return distance <= 50; // 200미터 반경으로 필터링
                 })
                 .collect(Collectors.toList());
 
@@ -57,12 +67,14 @@ public class AnalysisService {
             nearbyReviews = reviewRepository.findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(nearbyRestaurantIds);
         }
 
-        System.out.println("===== 주변 가게 리뷰 " + nearbyReviews.size() + "건 조회 완료! =====");
-        nearbyReviews.stream()
-                .forEach(review -> System.out.println(
-                        "[" + review.getRestaurant().getRestaurantName() + "] " + review.getContent()
-                ));
-        System.out.println("==========================================");
+
+//        위에서 1차로 들어온 주변 가게의 리뷰들 잘 가져오는지 디버깅 코드(일단 남겨놓음)
+//        System.out.println("===== 주변 가게 리뷰 " + nearbyReviews.size() + "건 조회됨 =====");
+//        nearbyReviews.stream()
+//                .forEach(review -> System.out.println(
+//                        "[" + review.getRestaurant().getRestaurantName() + "] " + review.getContent()
+//                ));
+//        System.out.println("==========================================");
 
 
         try {
