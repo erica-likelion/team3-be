@@ -10,7 +10,8 @@ public record AnalysisRequest(
         String marketingArea, // 대학가/학교 주변
         MinMax budget, // 만원. 월세 예산
         String managementMethod, // "홀 영업 위주"
-        MinMax averagePrice, // 원. 메뉴 가격
+        String representativeMenuName, // 추가: 대표 메뉴명
+        Integer representativeMenuPrice, // 추가: 대표 메뉴 가격 (원)
         MinMax size, // 평
         Integer height // 층
 ){
