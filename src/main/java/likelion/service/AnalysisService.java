@@ -10,6 +10,7 @@ import likelion.repository.ReviewRepository;
 import likelion.service.distance.DistanceCalc;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.core.JsonProcessingException;
 
 import java.io.IOException;
 import java.text.DecimalFormat;
@@ -80,7 +81,7 @@ public class AnalysisService {
             List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
             scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason()));
             scores.add(new AnalysisResponse.ScoreInfo("예산", 80, null, "임시 예산 점수"));
-            scores.add(new AnalysisResponse.ScoreInfo("메뉴 적합성", 75, null, "임시 메뉴 점수"));
+            scores.add(calculateMenuSuitabilityScore(request));
 
             // 리뷰 로딩(반경 내 식당 기준_추후 반경 내 + 동종업계로 개선하여 더 관련있는 리뷰만 나오게 수정할 예정입니다)
             List<Review> nearbyReviews = new ArrayList<>();
@@ -116,10 +117,10 @@ public class AnalysisService {
         final double ERICA_MAIN_GATE_LAT = 37.300097500612374;
         final double ERICA_MAIN_GATE_LON = 126.83779165311796;
 
-        // 정문부터 50m까진 감점 없고 초과부터는 10m당 2점 감점
+        // 정문부터 30m까진 감점 없고 초과부터는 10m당 3점 감점
         double distance = DistanceCalc.calculateDistance(latitude, longitude, ERICA_MAIN_GATE_LAT, ERICA_MAIN_GATE_LON);
-        int distancePenalty = (distance > 50)
-                ? (int) Math.ceil((distance - 50) / 10.0) * 2
+        int distancePenalty = (distance > 30)
+                ? (int) Math.ceil((distance - 30) / 10.0) * 3
                 : 0;
         score -= distancePenalty;
 
@@ -146,7 +147,7 @@ public class AnalysisService {
                 .collect(Collectors.toList());
 
         // 경쟁사 하나당 3점 감점
-        int competitorPenalty = competitorCount > 1 ? (int) ((competitorCount - 1) * 3) : 0;
+        int competitorPenalty = competitorCount > 1 ? (int) ((competitorCount) * 3) : 0;
         score -= competitorPenalty;
 
         score = Math.max(0, Math.min(100, score));
@@ -159,8 +160,8 @@ public class AnalysisService {
     // ====== 사용자 설명에 보낼 멘트(위치 점수 관련) ======
     private String generateLocationReason(double distance, int floor, long competitorCount, List<String> competitorNamesWithDist) {
         StringBuilder sb = new StringBuilder();
-        if (distance <= 50) sb.append(String.format("정문과 매우 가까워(약 %.0fm) 접근성이 우수합니다. ", distance));
-        else if (distance <= 100) sb.append(String.format("정문에서 도보 접근이 무난한 거리(약 %.0fm)입니다. ", distance));
+        if (distance <= 30) sb.append(String.format("정문과 매우 가까워(약 %.0fm) 접근성이 우수합니다. ", distance));
+        else if (distance <= 70) sb.append(String.format("정문에서 도보 접근이 무난한 거리(약 %.0fm)입니다. ", distance));
         else sb.append(String.format("정문과 거리가 다소 있어(약 %.0fm) 유동인구 유입이 제한적일 수 있습니다. ", distance));
 
         if (floor < 0) sb.append(String.format("지하 %d층으로 간판 노출과 접근성이 제한적입니다. ", Math.abs(floor)));
@@ -171,14 +172,140 @@ public class AnalysisService {
         if (competitorCount == 0) {
             sb.append("주변에 동종 업종 경쟁이 거의 없는 점은 큰 장점입니다.");
         } else if (competitorCount == 1) {
-            sb.append(String.format("주변 경쟁사: %s 1곳.", competitorNamesWithDist.get(0)));
+            sb.append(String.format("주변 경쟁사: %s 1곳의 적당한 경쟁이 있을 예정이지만 무난한 조건입니다.", competitorNamesWithDist.get(0)));
         } else {
             String list = String.join(", ", competitorNamesWithDist);
             long remain = competitorCount - competitorNamesWithDist.size();
-            if (remain > 0) sb.append(String.format("주변 경쟁사 %d곳: %s 외 %d곳이 있습니다. 참고하세요!", competitorCount, list, remain));
-            else sb.append(String.format("주변 경쟁사 %d곳: %s.", competitorCount, list));
+            if (remain > 0) sb.append(String.format("주변 경쟁사 %d곳: %s 외 %d곳이 있습니다. 따라서 경쟁 업체가 많으므로 좋지 않은 입지 조건입니다.", competitorCount, list, remain));
+            else sb.append(String.format("주변 경쟁사 %d곳: %s가(이) 있습니다. 따라서 경쟁 업체가 많으므로 좋지 않은 입지 조건입니다.", competitorCount, list));
         }
         return sb.toString().trim();
+    }
+
+    // 메뉴 적합성을 위한 상수 세팅
+    private static final int MENU_BASE_SCORE = 80;   // 기본 점수
+    private static final int MENU_MAX = 95;
+    private static final int MENU_MIN = 10;
+
+    // 학생 친화(공강 시간에 빠르게 먹기 좋은 메뉴) 보너스 + 설문 조사 기반 선호 메뉴(초밥, 국밥) 보너스
+    private static final Set<String> FAST_FRIENDLY = Set.of(
+            "덮밥/비빔밥","면/국수","라멘/우동/소바","짜장면","짬뽕","덮밥/도시락",
+            "샌드위치/샐러드","조각 케이크","아메리카노"
+    );
+    private static final Set<String> PREFERRED = Set.of("초밥","국밥");
+
+    // AI로 ' 표메뉴'의 대학가 평균가 가격 받아오는 메서드
+    private Integer fetchMenuAvgPriceFromAI(String representativeMenuName) throws JsonProcessingException {
+        if (representativeMenuName == null || representativeMenuName.isBlank()) return null;
+
+        String prompt = String.format("""
+      # 역할: 가격 추정 로봇
+      # 임무: '안산 대학가(한양대 ERICA 주변 기준)'에서 "%s" 1인 기준 평균 판매가(원)를 추정해 정수 숫자만 JSON으로 반환.
+      # 절대 규칙:
+      - 코드블록 금지, 순수 JSON만.
+      - 단위 '원'이나 텍스트 금지. 정수값만.
+      - 값은 과도하게 극단치가 되지 않도록 보수적으로.
+      
+      { "avgPrice": (정수원) }
+      """, representativeMenuName);
+
+        String ai = aiChatService.getAnalysisResponseFromAI(prompt);
+        String clean = ai.replace("```json","").replace("```","").trim();
+
+        // {"avgPrice": 6500} 형태 파싱
+        record AvgPrice(int avgPrice) {}
+        try {
+            AvgPrice parsed = objectMapper.readValue(clean, AvgPrice.class);
+            return parsed.avgPrice();
+        } catch (Exception e) {
+            System.err.println("[WARN] Menu avg price AI parse fail: " + e.getMessage());
+            return null; // 실패 시 백업 룰 사용
+        }
+    }
+
+    // AI 실패 시를 위한 보수적 백업 테이블(AI가 갑자기 튀는 값을 넣어서 값이 이상하게 0, 9999999이렇게 나오는 경우가 있다고 해서 만든 메서드입니다)
+    private Integer fallbackAvgPrice(String representativeMenuName) {
+        if (representativeMenuName == null) return null;
+        String key = representativeMenuName.replaceAll("\\s+","").toLowerCase();
+        Map<String,Integer> table = Map.ofEntries(
+                //내용은 안 중요한 코드라 옆으로 길게 썼습니다
+                Map.entry("아메리카노", 2000),Map.entry("조각케이크", 6500), Map.entry("샌드위치/샐러드", 7000), Map.entry("아이스크림/빙수", 8000), Map.entry("구움과자", 4000), Map.entry("국밥", 9000), Map.entry("덮밥/비빔밥", 9000), Map.entry("면/국수", 8000), Map.entry("찜/탕/찌개", 10000), Map.entry("구이/볶음류", 11000), Map.entry("팟타이", 11000), Map.entry("나시고렝", 11000), Map.entry("쌀국수", 11000), Map.entry("똠얌꿍", 13000), Map.entry("반미", 7000),
+                Map.entry("파스타", 13000), Map.entry("스테이크", 20000), Map.entry("리조또", 13000), Map.entry("샐러드/브런치", 12000), Map.entry("짜장면", 7000), Map.entry("짬뽕", 9000), Map.entry("탕수육", 16000), Map.entry("마라탕/샹궈", 13000), Map.entry("초밥", 13000), Map.entry("회", 18000), Map.entry("돈카츠", 11000), Map.entry("라멘/우동/소바", 9000), Map.entry("덮밥/도시락", 9000), Map.entry("기타",10000)
+        );
+        // AI 호출 실패 시 가장 가까운 키 매칭
+        for (String k : table.keySet()) {
+            if (key.contains(k.replace("/","").toLowerCase())) return table.get(k);
+        }
+        return null;
+    }
+
+    // 메뉴 적합성 점수 계산 로직
+    private AnalysisResponse.ScoreInfo calculateMenuSuitabilityScore(AnalysisRequest request) {
+        String menu = request.representativeMenuName();
+        Integer userPrice = request.representativeMenuPrice(); // 단위: 원 (프론트 입력 기준)
+
+        // 기본 방어(실패 시)
+        if (menu == null || menu.isBlank() || userPrice == null || userPrice <= 0) {
+            return new AnalysisResponse.ScoreInfo(
+                    "메뉴 적합성", 70, null, "대표메뉴/가격 정보가 부족해 보수적 점수를 부여했습니다."
+            );
+        }
+
+        Integer avg = null;
+        try {
+            avg = fetchMenuAvgPriceFromAI(menu);
+        } catch (Exception ignore) {}
+        if (avg == null) avg = fallbackAvgPrice(menu); // 실패 시 백업
+        if (avg == null) {
+            return new AnalysisResponse.ScoreInfo(
+                    "메뉴 적합성", 70, null, "평균가 추정이 어려워 보수적 점수를 부여했습니다."
+            );
+        }
+
+        // 80점을 기준으로, 평균가 대비 ±10% 당 ±5점
+        // diffRatio > 0 이면 우리 가격이 평균보다 비쌈 → 감점
+        double diffRatio = (userPrice - avg) / (double) avg;
+        int adjustByPrice = (int) Math.round((diffRatio / 0.10) * -5);
+        int score = MENU_BASE_SCORE + adjustByPrice;
+
+        // 가산점: 학생 친화/설문 선호
+        List<String> extras = new ArrayList<>();
+        if (FAST_FRIENDLY.contains(menu)) {
+            score += 5;
+            extras.add("공강 시간에 빠르게 먹기 좋은 메뉴라 가산점을 받았습니다.");
+        }
+        if (PREFERRED.contains(menu)) {
+            score += 5;
+            extras.add("실제 학생 설문 선호 메뉴(초밥/국밥)라 해당 메뉴를 대표메뉴로 설정하는 것은 좋은 선택입니다.");
+        }
+
+        score = Math.max(MENU_MIN, Math.min(MENU_MAX, score));
+
+        // 가격 차이 멘트 (0%는 근사치 처리)
+        double pct = Math.abs(diffRatio) * 100.0;
+        boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내면 동일 취급
+
+        String priceSentence;
+        if (nearlyZero) {
+            priceSentence = String.format("입력 가격 %,d원은 평균과 거의 동일합니다.", userPrice);
+        } else {
+            priceSentence = String.format(
+                    "입력 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
+                    userPrice,
+                    (diffRatio >= 0 ? "+" : "-"),
+                    pct,
+                    (diffRatio >= 0 ? "높은" : "낮은")
+            );
+        }
+
+        // 최종 reason 조합
+        String extraSentence = extras.isEmpty() ? "" : " " + String.join(" / ", extras);
+        String reason = String.format(
+                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s%s",
+                avg, priceSentence, extraSentence
+        );
+
+        return new AnalysisResponse.ScoreInfo("메뉴 적합성", score, null, reason);
     }
 
     // ====== 최종 프롬프트(지금은 접근성/위치 점수만 반영됩니다) ======
@@ -212,7 +339,7 @@ public class AnalysisService {
               "scores": [
                 {"name": "접근성", "score": %d, "expectedPrice": null, "reason": "%s"},
                 {"name": "예산", "score": %d, "expectedPrice": null, "reason": "예산 관련 상세 분석..."},
-                {"name": "메뉴 적합성", "score": %d, "expectedPrice": null, "reason": "메뉴 적합성 상세 분석..."}
+                {"name": "메뉴 적합성", "score": %d, "expectedPrice": null, "reason": "%s"}
               ],
               "reviewAnalysis": {
                 "summary": "주변 리뷰 종합 분석...",
@@ -230,8 +357,9 @@ public class AnalysisService {
                 request.addr(), request.category(),
                 scoreInfo, reviewInfo,
                 scores.get(0).score(), escapeForJson(scores.get(0).reason()),
-                scores.get(1).score(), scores.get(2).score());
-    }
+                scores.get(1).score(),
+                scores.get(2).score(), escapeForJson(scores.get(2).reason())
+        );}
 
     /**
      * 클라이언트 대분류를 카카오 세부 카테고리까지 포괄하도록 확장.
