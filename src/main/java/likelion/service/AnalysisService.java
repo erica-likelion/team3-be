@@ -111,7 +111,7 @@ public class AnalysisService {
     private LocationScoreFactors calculateLocationScore(AnalysisRequest request,
                                                         double latitude, double longitude,
                                                         List<Restaurant> competitorsInRadius) {
-        int base = 100;
+        int base = 90;
         int score = base;
 
         // 정문 좌표
@@ -152,17 +152,24 @@ public class AnalysisService {
                 .map(e -> String.format("%s(%sm)", safeName(e.getKey()), df.format(e.getValue())))
                 .collect(Collectors.toList());
 
-        // 사용자용 서술 + 브레이크다운
-        StringBuilder breakdown = new StringBuilder();
-        breakdown.append("— 점수 산식 —\n");
-        breakdown.append(String.format("기본점수: %d\n", base));
-        breakdown.append(String.format("거리 감점: %s (거리 %.0fm, 30m 초과 10m당 −3)\n", sign(-distancePenalty), distance));
-        breakdown.append(String.format("층수 감점: %s (층수 %d)\n", sign(-floorPenalty), floor));
-        breakdown.append(String.format("경쟁사 감점: %s (동종업계 %d곳)\n", sign(-competitorPenalty), competitorCount));
-        breakdown.append(String.format("최종점수: %d\n", score));
+        // 위치/접근성 점수 summary
+        String summary = generateLocationReason(distance, floor, competitorCount, competitorNamesWithDist);
 
-        String reasonText = generateLocationReason(distance, floor, competitorCount, competitorNamesWithDist);
-        String reason = breakdown.toString().trim() + "\n" + reasonText;
+        // 점수 산식
+        String breakdown = String.format(
+                "기본점수: %d%n" +
+                        "거리 감점: %s (거리 %.0fm, 30m 초과 10m당 −3)%n" +
+                        "층수 감점: %s (층수 %d)%n" +
+                        "경쟁사 감점: %s (동종업계 %d곳)%n" +
+                        "최종점수: %d",
+                base,
+                sign(-distancePenalty), distance,
+                sign(-floorPenalty), floor,
+                sign(-competitorPenalty), competitorCount,
+                score
+        );
+
+        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
         return new LocationScoreFactors(score, distance, floor, competitorCount, competitorNamesWithDist, reason);
     }
 
@@ -277,51 +284,58 @@ public class AnalysisService {
 
         // 90점을 기준으로, 평균가 대비 ±10% 당 ±5점
         // diffRatio > 0 이면 우리 가격이 평균보다 비쌈 → 감점
-        final int BASE = MENU_BASE_SCORE; // 90
-        int score = BASE;
-        double diffRatio = (userPrice - avg) / (double) avg; // > 0 이면 비싼거
+        double diffRatio = (userPrice - avg) / (double) avg;
         int adjustByPrice = (int) Math.round((diffRatio / 0.10) * -5);
-        score += adjustByPrice;
+        int score = MENU_BASE_SCORE + adjustByPrice;
 
-        // 가산점: 학생 친화/설문 선호
-        int bonusFast = 0, bonusPref = 0;
-        if (FAST_FRIENDLY.contains(menu)) bonusFast = 5;
-        if (PREFERRED.contains(menu))     bonusPref = 5;
-        score += bonusFast + bonusPref;
+        // 대학생 타겟/설문 선호 -> 가산점 부여
+        List<String> bonusNotes = new ArrayList<>();
+        int bonus = 0;
+        if (FAST_FRIENDLY.contains(menu)) {
+            bonus += 5;
+            bonusNotes.add("공강 시간에 빠르게 먹기 좋은 메뉴입니다.(+5)");
+        }
+        if (PREFERRED.contains(menu)) {
+            bonus += 5;
+            bonusNotes.add("해당 대표 메뉴는 학생 설문 선호 메뉴(초밥/국밥)이기에 이점이 있습니다.(+5)");
+        }
+        score += bonus;
 
         // 캡핑
-        int beforeCap = score;
         score = Math.max(MENU_MIN, Math.min(MENU_MAX, score));
-        int capAdj = score - beforeCap; // 캡에 걸리면 보정값이 생김
 
-        // 브레이크다운
-        StringBuilder bd = new StringBuilder();
-        bd.append("— 점수 산식 —\n");
-        bd.append(String.format("기본점수: %d\n", BASE));
-        bd.append(String.format("가격 조정: %s (평균대비 %s%.0f%% → ±10%% 당 ∓5)\n",
-                signed(adjustByPrice), (diffRatio >= 0 ? "+" : "-"), Math.abs(diffRatio * 100)));
-        if (bonusFast != 0) bd.append(String.format("가산점(빠르게 먹기 좋음): %s\n", signed(bonusFast)));
-        if (bonusPref != 0) bd.append(String.format("가산점(설문 선호: 초밥/국밥): %s\n", signed(bonusPref)));
-        if (capAdj != 0)    bd.append(String.format("캡 보정(최소 %d / 최대 %d): %s\n", MENU_MIN, MENU_MAX, signed(capAdj)));
-        bd.append(String.format("최종점수: %d\n", score));
-
-        // 자연어 설명 (중복 퍼센트 제거)
-        boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내
+        // summary 먼저
+        double pct = Math.abs(diffRatio) * 100.0;
+        boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내면 동일 취급
         String priceSentence = nearlyZero
-                ? String.format("사용자 분이 입력해주신 가격 %,d원은 평균과 거의 동일합니다.", userPrice)
-                : String.format("사용자 분이 입력해주신 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
-                userPrice, (diffRatio >= 0 ? "+" : "-"), Math.abs(diffRatio*100),
+                ? String.format("입력 가격 %,d원은 평균과 거의 동일합니다.", userPrice)
+                : String.format("입력 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
+                userPrice,
+                (diffRatio >= 0 ? "+" : "-"),
+                pct,
                 (diffRatio >= 0 ? "높은" : "낮은"));
+        String extraSentence = bonusNotes.isEmpty() ? "" : " " + String.join(" / ", bonusNotes);
 
-        List<String> extraNotes = new ArrayList<>();
-        if (FAST_FRIENDLY.contains(menu)) extraNotes.add("공강 시간에 빠르게 먹기 좋은 메뉴인 점은 상권 특성을 잘 반영한 메뉴입니다!");
-        if (PREFERRED.contains(menu))     extraNotes.add("학생 설문 선호 메뉴(초밥/국밥)에 있는 메뉴로 학생들에게 인기가 많을 것으로 예상됩니다!");
-        String extra = extraNotes.isEmpty() ? "" : " " + String.join(" · ", extraNotes);
+        String summary = String.format(
+                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s%s",
+                avg, priceSentence, extraSentence
+        );
 
-        String reason = String.format(
-                "%s\n해당 대표메뉴의 선택하신 지역의 평균가는 약 %,d원으로 추정됩니다. %s.%s",
-                bd.toString().trim(), avg, priceSentence, extra
-        ).trim();
+        // 점수 산식은 뒤에
+        String breakdown = String.format(
+                "기본점수: %d%n" +
+                        "가격 가감: %+d (평균가 %,d원 대비 %s%.0f%%)%n" +
+                        "보너스 합계: %+d (%s)%n" +
+                        "캡핑 범위: %d~%d%n" +
+                        "최종점수: %d",
+                MENU_BASE_SCORE,
+                adjustByPrice, avg, (diffRatio >= 0 ? "+" : "-"), pct,
+                bonus, (bonusNotes.isEmpty() ? "-" : String.join(", ", bonusNotes)),
+                MENU_MIN, MENU_MAX,
+                score
+        );
+
+        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
 
         return new AnalysisResponse.ScoreInfo("메뉴 적합성", score, null, reason);
     }
@@ -406,7 +420,7 @@ public class AnalysisService {
         long userDepoMax = manToWon(depoMaxMan);
 
         // 점수 규칙 (월세/보증금 각각 채점, 가중합)
-        int base = 80, minScore = 10, maxScore = 95;
+        int base = 90, minScore = 10, maxScore = 100;
 
         int rentDelta = scoreDeltaAgainstRange(userRentMax, expRentMin, expRentMid, expRentMax);
         int depoDelta = scoreDeltaAgainstRange(userDepoMax, expDepoMin, expDepoMid, expDepoMax);
@@ -416,7 +430,7 @@ public class AnalysisService {
         score = Math.max(minScore, Math.min(maxScore, score));
 
         // 이유(멘트 정해놓고 값 넣어서 주기)
-        String reason = String.format(
+        String summary = String.format(
                 "해당 지역의 요청 층수 %s 기준 1평당 예상 단가는 보증금 %,d원/월세 %,d원입니다. " +
                         "희망 면적 %d~%d평을 적용할 때 예상 총 월세는 %s - %s(중앙값 %s), 보증금은 %s~%s(중앙값 %s)로 추정됩니다. " +
                         "입력 예산은 월세 최대 %s, 보증금 최대 %s이며, 이를 기준으로 월세 적합도 %s, 보증금 적합도 %s로 평가했습니다.",
@@ -429,6 +443,20 @@ public class AnalysisService {
                 subScoreLabel(userDepoMax, expDepoMin, expDepoMid, expDepoMax)
         );
 
+        // 예산 적합도 점수 산식 추가
+        String breakdown = String.format(
+                "기본점수: %d\n" +
+                        "월세 가감: %+d (사용자 최대 %s vs 예상 %s~%s~%s)\n" +
+                        "보증금 가감: %+d (사용자 최대 %s vs 예상 %s~%s~%s)\n" +
+                        "점수 비중: 월세×70%% / 보증금×30%%\n" +
+                        "최종점수: %d",
+                base,
+                rentDelta, String.format("%,d만원", rentMaxMan), wonToManStr(expRentMin), wonToManStr(expRentMid), wonToManStr(expRentMax),
+                depoDelta, String.format("%,d만원", depoMaxMan), wonToManStr(expDepoMin), wonToManStr(expDepoMid), wonToManStr(expDepoMax),
+                score
+        );
+
+        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
         return new AnalysisResponse.ScoreInfo("예산 적합성", score, null, reason);
     }
 
