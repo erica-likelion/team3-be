@@ -80,7 +80,7 @@ public class AnalysisService {
             // 점수 배열 구성 (접근성을 제외한 나머지는 임시)
             List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
             scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason()));
-            scores.add(new AnalysisResponse.ScoreInfo("예산", 80, null, "임시 예산 점수"));
+            scores.add(calculateBudgetSuitabilityScore(request));
             scores.add(calculateMenuSuitabilityScore(request));
 
             // 리뷰 로딩(반경 내 식당 기준_추후 반경 내 + 동종업계로 개선하여 더 관련있는 리뷰만 나오게 수정할 예정입니다)
@@ -107,7 +107,7 @@ public class AnalysisService {
         }
     }
 
-    // ====== 거리/층/경쟁사 기반 위치 점수 계산 ======
+    // "위치/접근성" 계산 로직
     private LocationScoreFactors calculateLocationScore(AnalysisRequest request,
                                                         double latitude, double longitude,
                                                         List<Restaurant> competitorsInRadius) {
@@ -194,7 +194,7 @@ public class AnalysisService {
     );
     private static final Set<String> PREFERRED = Set.of("초밥","국밥");
 
-    // AI로 ' 표메뉴'의 대학가 평균가 가격 받아오는 메서드
+    // AI로 '대표메뉴'의 대학가 평균가 가격 받아오는 메서드
     private Integer fetchMenuAvgPriceFromAI(String representativeMenuName) throws JsonProcessingException {
         if (representativeMenuName == null || representativeMenuName.isBlank()) return null;
 
@@ -239,7 +239,7 @@ public class AnalysisService {
         return null;
     }
 
-    // 메뉴 적합성 점수 계산 로직
+    // "메뉴 적합성 점수 로직"
     private AnalysisResponse.ScoreInfo calculateMenuSuitabilityScore(AnalysisRequest request) {
         String menu = request.representativeMenuName();
         Integer userPrice = request.representativeMenuPrice(); // 단위: 원 (프론트 입력 기준)
@@ -287,10 +287,10 @@ public class AnalysisService {
 
         String priceSentence;
         if (nearlyZero) {
-            priceSentence = String.format("입력 가격 %,d원은 평균과 거의 동일합니다.", userPrice);
+            priceSentence = String.format("입력해주신 대표메뉴의 가격 %,d원은 평균과 거의 동일합니다.", userPrice);
         } else {
             priceSentence = String.format(
-                    "입력 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
+                    "입력해주신 대표메뉴의 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
                     userPrice,
                     (diffRatio >= 0 ? "+" : "-"),
                     pct,
@@ -301,14 +301,146 @@ public class AnalysisService {
         // 최종 reason 조합
         String extraSentence = extras.isEmpty() ? "" : " " + String.join(" / ", extras);
         String reason = String.format(
-                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s%s",
+                "해당 대표메뉴의 선택하신 지역 내 평균가는 약 %,d원으로 추정됩니다. %s%s",
                 avg, priceSentence, extraSentence
         );
 
         return new AnalysisResponse.ScoreInfo("메뉴 적합성", score, null, reason);
     }
 
-    // ====== 최종 프롬프트(지금은 접근성/위치 점수만 반영됩니다) ======
+    // 예산 적합성 층별 1평당 (보증금, 월세) 상수, 가격 단위는 "원/평"입니다
+    public record FloorPrice(int depositPerPy, int monthlyPerPy) {}
+
+    // 각 층별 1평당 보증금/월세 원
+    // B는 그냥 지하층 전부 다 포괄. 5층 이상이랑 루프탑/옥상은 별개.
+    // 실제 데이터에 루프탑이랑 지하는 없었어서 나머지를 기준으로 보수적으로 잡았습니다.
+    private static final Map<String, FloorPrice> PY_PRICE_BY_FLOOR = Map.of(
+            "B",    new FloorPrice(607_000, 34_000),
+            "1F",   new FloorPrice(3_540_000, 177_000),
+            "2F",   new FloorPrice(860_000, 43_000),
+            "3F",   new FloorPrice(720_000, 36_000),
+            "4F+",   new FloorPrice(680_000, 34_000),
+            "ROOF", new FloorPrice(516_000, 27_000)
+    );
+
+    // 우리 층 수 String으로 받아오는지 프론트에 물어보기
+    private String floorKeyFrom(Integer height) {
+        if (height < 0) return "B";
+        if (height == 1) return "1F";
+        if (height == 2) return "2F";
+        if (height == 3) return "3F";
+        if (height == 99) return "ROOF"; // 옥상/루프탑 고르면 99로 넘겨달라고 해야징
+        return "4F+";
+    }
+
+    // 만원 → 원 변환 (예: 150만원 => 1_500_000원)
+    private static long manToWon(Integer man) {
+        if (man == null) return 0L;
+        return man.longValue() * 10_000L;
+    }
+
+    // 원 → 만원 문자열 포맷 (콤마, 단위 포함)
+    private static String wonToManStr(long won) {
+        long man = Math.round(won / 10_000.0);
+        return String.format("%,d만원", man);
+    }
+
+    // 소수점 없는 퍼센트 문자열
+    private static String pct0(double v) {
+        return String.format("%.0f%%", v);
+    }
+
+    // "예산 적합성" 계산 로직
+    private AnalysisResponse.ScoreInfo calculateBudgetSuitabilityScore(AnalysisRequest request) {
+        // 방어: 필수 입력
+        if (request.size() == null || request.budget() == null) {
+            return new AnalysisResponse.ScoreInfo(
+                    "예산 적합성", 70, null,
+                    "면적 또는 월세 예산 정보가 부족해 보수적으로 평가했습니다."
+            );
+        }
+
+        // 입력 파라미터
+        Integer sizeMin = Optional.ofNullable(request.size().min()).orElse(0);   // 평
+        Integer sizeMax = Optional.ofNullable(request.size().max()).orElse(sizeMin);
+        Integer rentMinMan = Optional.ofNullable(request.budget().min()).orElse(0); // 만원
+        Integer rentMaxMan = Optional.ofNullable(request.budget().max()).orElse(rentMinMan);
+        Integer depoMinMan = request.deposit() == null ? 0 : Optional.ofNullable(request.deposit().min()).orElse(0);
+        Integer depoMaxMan = request.deposit() == null ? depoMinMan : Optional.ofNullable(request.deposit().max()).orElse(depoMinMan);
+
+        // 층 키 및 1평 단가
+        String floorKey = floorKeyFrom(request.height());
+        FloorPrice fp = PY_PRICE_BY_FLOOR.getOrDefault(floorKey, PY_PRICE_BY_FLOOR.get("1F"));
+
+        // 예상 총 월세/보증금 (원) : (단가 원/평) × (평수)
+        long expRentMin  = (long) fp.monthlyPerPy() * sizeMin;
+        long expRentMax  = (long) fp.monthlyPerPy() * sizeMax;
+        long expRentMid  = Math.round((expRentMin + expRentMax) / 2.0);
+
+        long expDepoMin  = (long) fp.depositPerPy() * sizeMin;
+        long expDepoMax  = (long) fp.depositPerPy() * sizeMax;
+        long expDepoMid  = Math.round((expDepoMin + expDepoMax) / 2.0);
+
+        // 사용자 예산(만원) → 원
+        long userRentMax = manToWon(rentMaxMan);
+        long userDepoMax = manToWon(depoMaxMan);
+
+        // 점수 규칙 (월세/보증금 각각 채점, 가중합)
+        int base = 80, minScore = 10, maxScore = 95;
+
+        int rentDelta = scoreDeltaAgainstRange(userRentMax, expRentMin, expRentMid, expRentMax);
+        int depoDelta = scoreDeltaAgainstRange(userDepoMax, expDepoMin, expDepoMid, expDepoMax);
+
+        // 가중합: 월세 70%, 보증금 30%
+        int score = base + (int) Math.round(rentDelta * 0.7 + depoDelta * 0.3);
+        score = Math.max(minScore, Math.min(maxScore, score));
+
+        // 이유(멘트 정해놓고 값 넣어서 주기)
+        String reason = String.format(
+                "해당 지역의 요청 층수 %s 기준 1평당 예상 단가는 보증금 %,d원/월세 %,d원입니다. " +
+                        "희망 면적 %d~%d평을 적용할 때 예상 총 월세는 %s - %s(중앙값 %s), 보증금은 %s~%s(중앙값 %s)로 추정됩니다. " +
+                        "입력 예산은 월세 최대 %s, 보증금 최대 %s이며, 이를 기준으로 월세 적합도 %s, 보증금 적합도 %s로 평가했습니다.",
+                floorKey, fp.depositPerPy(), fp.monthlyPerPy(),
+                sizeMin, sizeMax,
+                wonToManStr(expRentMin), wonToManStr(expRentMax), wonToManStr(expRentMid),
+                wonToManStr(expDepoMin), wonToManStr(expDepoMax), wonToManStr(expDepoMid),
+                String.format("%,d만원", rentMaxMan), String.format("%,d만원", depoMaxMan),
+                subScoreLabel(userRentMax, expRentMin, expRentMid, expRentMax),
+                subScoreLabel(userDepoMax, expDepoMin, expDepoMid, expDepoMax)
+        );
+
+        return new AnalysisResponse.ScoreInfo("예산 적합성", score, null, reason);
+    }
+
+    /**
+     * 사용자 최대치(userMax)를 예상 구간과 비교해 점수 증감을 반환
+     *  - userMax >= expMax : +10
+     *  - userMax >= expMid : +5
+     *  - userMax >= expMin :  0
+     *  - userMax  < expMin : 부족비율 10% 당 -5 (최소 -30까지)
+     */
+    private int scoreDeltaAgainstRange(long userMax, long expMin, long expMid, long expMax) {
+        if (userMax >= expMax) return +10;
+        if (userMax >= expMid) return +5;
+        if (userMax >= expMin) return 0;
+
+        // 부족비율 (expMin 대비)
+        double gap = (expMin - userMax) / (double) expMin; // 0~1+
+        int steps = (int) Math.ceil(gap / 0.10);           // 10% 단위
+        return Math.max(-30, -5 * steps);
+    }
+
+    // 서브 라벨: 사용자 최대가 구간 어디에 있는지 표현
+    private String subScoreLabel(long userMax, long expMin, long expMid, long expMax) {
+        if (userMax >= expMax) return "충분(상한 이상)";
+        if (userMax >= expMid) return "양호(중앙값 이상)";
+        if (userMax >= expMin) return "가능(최소값 이상)";
+        double gap = (expMin - userMax) / (double) expMin;
+        return "부족(" + pct0(gap * 100) + " 부족)";
+    }
+
+
+    // 최종 프롬프트
     private String createSimpleFinalReportPrompt(AnalysisRequest request, List<AnalysisResponse.ScoreInfo> scores, List<Review> reviews) {
         String scoreInfo = scores.stream()
                 .map(s -> String.format("- %s: %d점 (%s)", s.name(), s.score(), s.reason()))
@@ -338,7 +470,7 @@ public class AnalysisService {
             {
               "scores": [
                 {"name": "접근성", "score": %d, "expectedPrice": null, "reason": "%s"},
-                {"name": "예산", "score": %d, "expectedPrice": null, "reason": "예산 관련 상세 분석..."},
+                {"name": "예산", "score": %d, "expectedPrice": null, "reason": "%s"},
                 {"name": "메뉴 적합성", "score": %d, "expectedPrice": null, "reason": "%s"}
               ],
               "reviewAnalysis": {
@@ -357,7 +489,7 @@ public class AnalysisService {
                 request.addr(), request.category(),
                 scoreInfo, reviewInfo,
                 scores.get(0).score(), escapeForJson(scores.get(0).reason()),
-                scores.get(1).score(),
+                scores.get(1).score(), escapeForJson(scores.get(1).reason()),
                 scores.get(2).score(), escapeForJson(scores.get(2).reason())
         );}
 
