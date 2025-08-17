@@ -111,7 +111,8 @@ public class AnalysisService {
     private LocationScoreFactors calculateLocationScore(AnalysisRequest request,
                                                         double latitude, double longitude,
                                                         List<Restaurant> competitorsInRadius) {
-        int score = 100;
+        int base = 100;
+        int score = base;
 
         // 정문 좌표
         final double ERICA_MAIN_GATE_LAT = 37.300097500612374;
@@ -120,8 +121,7 @@ public class AnalysisService {
         // 정문부터 30m까진 감점 없고 초과부터는 10m당 3점 감점
         double distance = DistanceCalc.calculateDistance(latitude, longitude, ERICA_MAIN_GATE_LAT, ERICA_MAIN_GATE_LON);
         int distancePenalty = (distance > 30)
-                ? (int) Math.ceil((distance - 30) / 10.0) * 3
-                : 0;
+                ? (int) Math.ceil((distance - 30) / 10.0) * 3 : 0;
         score -= distancePenalty;
 
         // 1층은 감점 없고 2층부터 7점씩 감점, 지하는 층당 10점 감점
@@ -134,7 +134,13 @@ public class AnalysisService {
 
         long competitorCount = competitorsInRadius.size();
 
-        // 이름+거리로 정렬하여 5개만(결과에는 5개 넘어가는 것은 그 외 n개라고 나오게함)
+        // 경쟁사 하나당 3점 감점
+        int competitorPenalty = competitorCount > 1 ? (int) ((competitorCount) * 3) : 0;
+        score -= competitorPenalty;
+
+        score = Math.max(0, Math.min(100, score));
+
+        // 이름+거리로 정렬하여 5개만 표기(결과에 5개 넘어가는 것은 그 외 n개라고 나오게함)
         DecimalFormat df = new DecimalFormat("#0");
         List<String> competitorNamesWithDist = competitorsInRadius.stream()
                 .map(r -> {
@@ -146,15 +152,23 @@ public class AnalysisService {
                 .map(e -> String.format("%s(%sm)", safeName(e.getKey()), df.format(e.getValue())))
                 .collect(Collectors.toList());
 
-        // 경쟁사 하나당 3점 감점
-        int competitorPenalty = competitorCount > 1 ? (int) ((competitorCount) * 3) : 0;
-        score -= competitorPenalty;
+        // 사용자용 서술 + 브레이크다운
+        StringBuilder breakdown = new StringBuilder();
+        breakdown.append("— 점수 산식 —\n");
+        breakdown.append(String.format("기본점수: %d\n", base));
+        breakdown.append(String.format("거리 감점: %s (거리 %.0fm, 30m 초과 10m당 −3)\n", sign(-distancePenalty), distance));
+        breakdown.append(String.format("층수 감점: %s (층수 %d)\n", sign(-floorPenalty), floor));
+        breakdown.append(String.format("경쟁사 감점: %s (동종업계 %d곳)\n", sign(-competitorPenalty), competitorCount));
+        breakdown.append(String.format("최종점수: %d\n", score));
 
-        score = Math.max(0, Math.min(100, score));
-
-        // 사용자용 설명 (이름+거리 포함)
-        String reason = generateLocationReason(distance, floor, competitorCount, competitorNamesWithDist);
+        String reasonText = generateLocationReason(distance, floor, competitorCount, competitorNamesWithDist);
+        String reason = breakdown.toString().trim() + "\n" + reasonText;
         return new LocationScoreFactors(score, distance, floor, competitorCount, competitorNamesWithDist, reason);
+    }
+
+    // 부호 붙여주는 헬퍼
+    private static String sign(int v) {
+        return (v >= 0 ? "+" : "") + v;
     }
 
     // ====== 사용자 설명에 보낼 멘트(위치 점수 관련) ======
