@@ -197,7 +197,7 @@ public class AnalysisService {
     }
 
     // 메뉴 적합성을 위한 상수 세팅
-    private static final int MENU_BASE_SCORE = 80;   // 기본 점수
+    private static final int MENU_BASE_SCORE = 90;   // 기본 점수
     private static final int MENU_MAX = 95;
     private static final int MENU_MIN = 10;
 
@@ -261,14 +261,13 @@ public class AnalysisService {
         // 기본 방어(실패 시)
         if (menu == null || menu.isBlank() || userPrice == null || userPrice <= 0) {
             return new AnalysisResponse.ScoreInfo(
-                    "메뉴 적합성", 70, null, "대표메뉴/가격 정보가 부족해 보수적 점수를 부여했습니다."
+                    "메뉴 적합성", 70, null,
+                    "— 점수 산식 —\n기본점수: 70\n사유: 대표메뉴/가격 정보 부족 → 보수적 점수 부여"
             );
         }
 
         Integer avg = null;
-        try {
-            avg = fetchMenuAvgPriceFromAI(menu);
-        } catch (Exception ignore) {}
+        try { avg = fetchMenuAvgPriceFromAI(menu); } catch (Exception ignore) {}
         if (avg == null) avg = fallbackAvgPrice(menu); // 실패 시 백업
         if (avg == null) {
             return new AnalysisResponse.ScoreInfo(
@@ -276,51 +275,58 @@ public class AnalysisService {
             );
         }
 
-        // 80점을 기준으로, 평균가 대비 ±10% 당 ±5점
+        // 90점을 기준으로, 평균가 대비 ±10% 당 ±5점
         // diffRatio > 0 이면 우리 가격이 평균보다 비쌈 → 감점
-        double diffRatio = (userPrice - avg) / (double) avg;
+        final int BASE = MENU_BASE_SCORE; // 90
+        int score = BASE;
+        double diffRatio = (userPrice - avg) / (double) avg; // > 0 이면 비싼거
         int adjustByPrice = (int) Math.round((diffRatio / 0.10) * -5);
-        int score = MENU_BASE_SCORE + adjustByPrice;
+        score += adjustByPrice;
 
         // 가산점: 학생 친화/설문 선호
-        List<String> extras = new ArrayList<>();
-        if (FAST_FRIENDLY.contains(menu)) {
-            score += 5;
-            extras.add("공강 시간에 빠르게 먹기 좋은 메뉴라 가산점을 받았습니다.");
-        }
-        if (PREFERRED.contains(menu)) {
-            score += 5;
-            extras.add("실제 학생 설문 선호 메뉴(초밥/국밥)라 해당 메뉴를 대표메뉴로 설정하는 것은 좋은 선택입니다.");
-        }
+        int bonusFast = 0, bonusPref = 0;
+        if (FAST_FRIENDLY.contains(menu)) bonusFast = 5;
+        if (PREFERRED.contains(menu))     bonusPref = 5;
+        score += bonusFast + bonusPref;
 
+        // 캡핑
+        int beforeCap = score;
         score = Math.max(MENU_MIN, Math.min(MENU_MAX, score));
+        int capAdj = score - beforeCap; // 캡에 걸리면 보정값이 생김
 
-        // 가격 차이 멘트 (0%는 근사치 처리)
-        double pct = Math.abs(diffRatio) * 100.0;
-        boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내면 동일 취급
+        // 브레이크다운
+        StringBuilder bd = new StringBuilder();
+        bd.append("— 점수 산식 —\n");
+        bd.append(String.format("기본점수: %d\n", BASE));
+        bd.append(String.format("가격 조정: %s (평균대비 %s%.0f%% → ±10%% 당 ∓5)\n",
+                signed(adjustByPrice), (diffRatio >= 0 ? "+" : "-"), Math.abs(diffRatio * 100)));
+        if (bonusFast != 0) bd.append(String.format("가산점(빠르게 먹기 좋음): %s\n", signed(bonusFast)));
+        if (bonusPref != 0) bd.append(String.format("가산점(설문 선호: 초밥/국밥): %s\n", signed(bonusPref)));
+        if (capAdj != 0)    bd.append(String.format("캡 보정(최소 %d / 최대 %d): %s\n", MENU_MIN, MENU_MAX, signed(capAdj)));
+        bd.append(String.format("최종점수: %d\n", score));
 
-        String priceSentence;
-        if (nearlyZero) {
-            priceSentence = String.format("입력해주신 대표메뉴의 가격 %,d원은 평균과 거의 동일합니다.", userPrice);
-        } else {
-            priceSentence = String.format(
-                    "입력해주신 대표메뉴의 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
-                    userPrice,
-                    (diffRatio >= 0 ? "+" : "-"),
-                    pct,
-                    (diffRatio >= 0 ? "높은" : "낮은")
-            );
-        }
+        // 자연어 설명 (중복 퍼센트 제거)
+        boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내
+        String priceSentence = nearlyZero
+                ? String.format("사용자 분이 입력해주신 가격 %,d원은 평균과 거의 동일합니다.", userPrice)
+                : String.format("사용자 분이 입력해주신 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
+                userPrice, (diffRatio >= 0 ? "+" : "-"), Math.abs(diffRatio*100),
+                (diffRatio >= 0 ? "높은" : "낮은"));
 
-        // 최종 reason 조합
-        String extraSentence = extras.isEmpty() ? "" : " " + String.join(" / ", extras);
+        List<String> extraNotes = new ArrayList<>();
+        if (FAST_FRIENDLY.contains(menu)) extraNotes.add("공강 시간에 빠르게 먹기 좋은 메뉴인 점은 상권 특성을 잘 반영한 메뉴입니다!");
+        if (PREFERRED.contains(menu))     extraNotes.add("학생 설문 선호 메뉴(초밥/국밥)에 있는 메뉴로 학생들에게 인기가 많을 것으로 예상됩니다!");
+        String extra = extraNotes.isEmpty() ? "" : " " + String.join(" · ", extraNotes);
+
         String reason = String.format(
-                "해당 대표메뉴의 선택하신 지역 내 평균가는 약 %,d원으로 추정됩니다. %s%s",
-                avg, priceSentence, extraSentence
-        );
+                "%s\n해당 대표메뉴의 선택하신 지역의 평균가는 약 %,d원으로 추정됩니다. %s.%s",
+                bd.toString().trim(), avg, priceSentence, extra
+        ).trim();
 
         return new AnalysisResponse.ScoreInfo("메뉴 적합성", score, null, reason);
     }
+
+    private static String signed(int v) { return (v >= 0 ? "+" : "") + v; }
 
     // 예산 적합성 층별 1평당 (보증금, 월세) 상수, 가격 단위는 "원/평"입니다
     public record FloorPrice(int depositPerPy, int monthlyPerPy) {}
@@ -557,7 +563,7 @@ public class AnalysisService {
 
         // 중식
         bucket.put("중식", Arrays.asList(
-                "중식","중국","중국요리","마라","짬뽕","짜장","훠궈"));
+                "중식","중국","중국요리","마라","짬뽕","짜장면","훠궈"));
 
         // 일식
         bucket.put("일식", Arrays.asList(
