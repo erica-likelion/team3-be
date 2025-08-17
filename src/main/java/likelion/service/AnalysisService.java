@@ -134,7 +134,7 @@ public class AnalysisService {
 
         long competitorCount = competitorsInRadius.size();
 
-        // 이름+거리로 정렬하여 5개만
+        // 이름+거리로 정렬하여 5개만(결과에는 5개 넘어가는 것은 그 외 n개라고 나오게함)
         DecimalFormat df = new DecimalFormat("#0");
         List<String> competitorNamesWithDist = competitorsInRadius.stream()
                 .map(r -> {
