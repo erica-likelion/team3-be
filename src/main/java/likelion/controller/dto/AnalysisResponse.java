@@ -6,7 +6,6 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 public record AnalysisResponse(
         List<ScoreInfo> scores,
         ReviewAnalysis reviewAnalysis,
-        List<Tip> tips,
 
         // 분석 상세보기를 위한 dto 추가
         DetailAnalysis detailAnalysis
@@ -24,22 +23,17 @@ public record AnalysisResponse(
             Integer securityDeposit
     ) {}
 
+    // 피그마 내용 바탕으로 수정
     public record ReviewAnalysis(
-            String summary,
-            List<String> positiveKeywords,
-            List<String> negativeKeywords,
-            List<ReviewSample> reviewSamples
+            Double averageRating,             // 유사업종 평균 평점 (리뷰가 없으면 null)
+            List<ReviewSample> reviewSamples, // 대표 리뷰
+            String feedback // 리뷰 피드백
     ) {}
 
     public record ReviewSample(
             String storeName,
             double reviewScore,
             List<String> highlights
-    ) {}
-
-    public record Tip(
-            String type,
-            String message
     ) {}
 
     //상세 분석 정보를 담을 record추가(경쟁업체_리스트로, 해당 상권 소비자 특성 분석)

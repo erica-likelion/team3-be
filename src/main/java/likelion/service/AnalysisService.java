@@ -12,10 +12,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
-import java.io.IOException;
 import java.text.DecimalFormat;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.math.BigDecimal;
 
 @Service
 @RequiredArgsConstructor
@@ -27,12 +27,8 @@ public class AnalysisService {
     private final ObjectMapper objectMapper;
 
     // 위치 점수 계산 결과
-    private record LocationScoreFactors(
-            int score,
-            double distanceToMainGate,
-            int floor,
-            long competitorCount,
-            List<String> competitorNames, // "가게명(거리m)" 형태
+    private record LocationScoreFactors(int score, double distanceToMainGate,
+            int floor, long competitorCount, List<String> competitorNames, // "가게명(거리m)" 형태
             String reason
     ) {}
 
@@ -56,7 +52,7 @@ public class AnalysisService {
                 .filter(r -> DistanceCalc.calculateDistance(latitude, longitude, r.getLatitude(), r.getLongitude()) <= radiusM)
                 .collect(Collectors.toList());
 
-        // 업종(문자열) 기반 동종업계 1차 필터 (아래에 카테고라-json 키워드 매핑 코드 있습니다), (동종업계는 위치/접근성 및 메뉴 가격 적합도에 사용할 예정)
+        // 업종(문자열) 기반 동종업계 1차 필터 (아래에 카테고리-json의 키워드 매핑 코드 있습니다), (동종업계는 위치/접근성에 사용)
         String targetCategory = Optional.ofNullable(request.category()).orElse("").trim();
         List<String> categoryKeywords = expandCategoryKeywords(targetCategory);
         List<Restaurant> sameCategory = withCoords.stream()
@@ -72,46 +68,35 @@ public class AnalysisService {
                 .filter(r -> radiusKeys.contains(keyOf(r)))
                 .collect(Collectors.toList());
 
-        try {
-            //  위치 점수 계산 (최종 = 반경 안 + 동종업계 교집합 기준)
-            LocationScoreFactors locationFactors =
-                    calculateLocationScore(request, latitude, longitude, competitorsInRadius);
 
-            // 점수 배열 구성 (접근성을 제외한 나머지는 임시)
-            List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
-            scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason()));
-            scores.add(new AnalysisResponse.ScoreInfo("예산", 80, null, "임시 예산 점수"));
-            scores.add(calculateMenuSuitabilityScore(request));
+        //  위치 점수 계산 (최종 = 반경 안 + 동종업계 교집합 기준)
+        LocationScoreFactors locationFactors =
+                calculateLocationScore(request, latitude, longitude, competitorsInRadius);
 
-            // 리뷰 로딩(반경 내 식당 기준_추후 반경 내 + 동종업계로 개선하여 더 관련있는 리뷰만 나오게 수정할 예정입니다)
-            List<Review> nearbyReviews = new ArrayList<>();
-            if (!withinRadius.isEmpty()) {
-                List<Long> ids = withinRadius.stream()
-                        .map(Restaurant::getKakaoPlaceId)
-                        .filter(Objects::nonNull)
-                        .collect(Collectors.toList());
-                if (!ids.isEmpty()) {
-                    nearbyReviews = reviewRepository.findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(ids);
-                }
-            }
+        // 점수 배열 구성
+        List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
+        scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason()));
+        scores.add(calculateBudgetSuitabilityScore(request));
+        scores.add(calculateMenuSuitabilityScore(request));
 
-            // 프롬프트 생성
-            String finalPrompt = createSimpleFinalReportPrompt(request, scores, nearbyReviews);
-            String aiFinalResponseJson = aiChatService.getAnalysisResponseFromAI(finalPrompt);
-            String cleanJson = aiFinalResponseJson.replace("```json", "").replace("```", "").trim();
-            return objectMapper.readValue(cleanJson, AnalysisResponse.class);
+        // ★ 동종업계 리뷰 분석 생성(반경 무관, 같은 카테고리 전체)
+        AnalysisResponse.ReviewAnalysis reviewAnalysis =
+                buildReviewAnalysisSameCategory(targetCategory);
 
-        } catch (IOException e) {
-            e.printStackTrace();
-            return new AnalysisResponse(List.of(), null, List.of(), null);
-        }
+        // scores: 3가지 항목 점수 관련, reviewAnalysis: 리뷰 관련, detailAnalysis: 상세 분석 관련
+        return new AnalysisResponse(
+                scores,
+                reviewAnalysis,
+                null            // detailAnalysis는 추후 확장
+        );
     }
 
-    // ====== 거리/층/경쟁사 기반 위치 점수 계산 ======
+    // "위치/접근성" 계산 로직
     private LocationScoreFactors calculateLocationScore(AnalysisRequest request,
                                                         double latitude, double longitude,
                                                         List<Restaurant> competitorsInRadius) {
-        int score = 100;
+        int base = 90;
+        int score = base;
 
         // 정문 좌표
         final double ERICA_MAIN_GATE_LAT = 37.300097500612374;
@@ -120,8 +105,7 @@ public class AnalysisService {
         // 정문부터 30m까진 감점 없고 초과부터는 10m당 3점 감점
         double distance = DistanceCalc.calculateDistance(latitude, longitude, ERICA_MAIN_GATE_LAT, ERICA_MAIN_GATE_LON);
         int distancePenalty = (distance > 30)
-                ? (int) Math.ceil((distance - 30) / 10.0) * 3
-                : 0;
+                ? (int) Math.ceil((distance - 30) / 10.0) * 3 : 0;
         score -= distancePenalty;
 
         // 1층은 감점 없고 2층부터 7점씩 감점, 지하는 층당 10점 감점
@@ -134,7 +118,13 @@ public class AnalysisService {
 
         long competitorCount = competitorsInRadius.size();
 
-        // 이름+거리로 정렬하여 5개만
+        // 경쟁사 하나당 3점 감점
+        int competitorPenalty = competitorCount > 1 ? (int) ((competitorCount) * 3) : 0;
+        score -= competitorPenalty;
+
+        score = Math.max(0, Math.min(100, score));
+
+        // 이름+거리로 정렬하여 5개만 표기(결과에 5개 넘어가는 것은 그 외 n개라고 나오게함)
         DecimalFormat df = new DecimalFormat("#0");
         List<String> competitorNamesWithDist = competitorsInRadius.stream()
                 .map(r -> {
@@ -146,15 +136,30 @@ public class AnalysisService {
                 .map(e -> String.format("%s(%sm)", safeName(e.getKey()), df.format(e.getValue())))
                 .collect(Collectors.toList());
 
-        // 경쟁사 하나당 3점 감점
-        int competitorPenalty = competitorCount > 1 ? (int) ((competitorCount) * 3) : 0;
-        score -= competitorPenalty;
+        // 위치/접근성 점수 summary
+        String summary = generateLocationReason(distance, floor, competitorCount, competitorNamesWithDist);
 
-        score = Math.max(0, Math.min(100, score));
+        // 점수 산식
+        String breakdown = String.format(
+                "기본점수: %d%n" +
+                        "거리 감점: %s (거리 %.0fm, 30m 초과 10m당 −3)%n" +
+                        "층수 감점: %s (층수 %d)%n" +
+                        "경쟁사 감점: %s (동종업계 %d곳)%n" +
+                        "최종점수: %d",
+                base,
+                sign(-distancePenalty), distance,
+                sign(-floorPenalty), floor,
+                sign(-competitorPenalty), competitorCount,
+                score
+        );
 
-        // 사용자용 설명 (이름+거리 포함)
-        String reason = generateLocationReason(distance, floor, competitorCount, competitorNamesWithDist);
+        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
         return new LocationScoreFactors(score, distance, floor, competitorCount, competitorNamesWithDist, reason);
+    }
+
+    // 부호 붙여주는 헬퍼
+    private static String sign(int v) {
+        return (v >= 0 ? "+" : "") + v;
     }
 
     // ====== 사용자 설명에 보낼 멘트(위치 점수 관련) ======
@@ -183,7 +188,7 @@ public class AnalysisService {
     }
 
     // 메뉴 적합성을 위한 상수 세팅
-    private static final int MENU_BASE_SCORE = 80;   // 기본 점수
+    private static final int MENU_BASE_SCORE = 90;   // 기본 점수
     private static final int MENU_MAX = 95;
     private static final int MENU_MIN = 10;
 
@@ -194,7 +199,7 @@ public class AnalysisService {
     );
     private static final Set<String> PREFERRED = Set.of("초밥","국밥");
 
-    // AI로 ' 표메뉴'의 대학가 평균가 가격 받아오는 메서드
+    // AI로 '대표메뉴'의 대학가 평균가 가격 받아오는 메서드
     private Integer fetchMenuAvgPriceFromAI(String representativeMenuName) throws JsonProcessingException {
         if (representativeMenuName == null || representativeMenuName.isBlank()) return null;
 
@@ -239,7 +244,7 @@ public class AnalysisService {
         return null;
     }
 
-    // 메뉴 적합성 점수 계산 로직
+    // "메뉴 적합성 점수 로직"
     private AnalysisResponse.ScoreInfo calculateMenuSuitabilityScore(AnalysisRequest request) {
         String menu = request.representativeMenuName();
         Integer userPrice = request.representativeMenuPrice(); // 단위: 원 (프론트 입력 기준)
@@ -247,14 +252,13 @@ public class AnalysisService {
         // 기본 방어(실패 시)
         if (menu == null || menu.isBlank() || userPrice == null || userPrice <= 0) {
             return new AnalysisResponse.ScoreInfo(
-                    "메뉴 적합성", 70, null, "대표메뉴/가격 정보가 부족해 보수적 점수를 부여했습니다."
+                    "메뉴 적합성", 70, null,
+                    "— 점수 산식 —\n기본점수: 70\n사유: 대표메뉴/가격 정보 부족 → 보수적 점수 부여"
             );
         }
 
         Integer avg = null;
-        try {
-            avg = fetchMenuAvgPriceFromAI(menu);
-        } catch (Exception ignore) {}
+        try { avg = fetchMenuAvgPriceFromAI(menu); } catch (Exception ignore) {}
         if (avg == null) avg = fallbackAvgPrice(menu); // 실패 시 백업
         if (avg == null) {
             return new AnalysisResponse.ScoreInfo(
@@ -262,53 +266,389 @@ public class AnalysisService {
             );
         }
 
-        // 80점을 기준으로, 평균가 대비 ±10% 당 ±5점
+        // 90점을 기준으로, 평균가 대비 ±10% 당 ±5점
         // diffRatio > 0 이면 우리 가격이 평균보다 비쌈 → 감점
         double diffRatio = (userPrice - avg) / (double) avg;
         int adjustByPrice = (int) Math.round((diffRatio / 0.10) * -5);
         int score = MENU_BASE_SCORE + adjustByPrice;
 
-        // 가산점: 학생 친화/설문 선호
-        List<String> extras = new ArrayList<>();
+        // 대학생 타겟/설문 선호 -> 가산점 부여
+        List<String> bonusNotes = new ArrayList<>();
+        int bonus = 0;
         if (FAST_FRIENDLY.contains(menu)) {
-            score += 5;
-            extras.add("공강 시간에 빠르게 먹기 좋은 메뉴라 가산점을 받았습니다.");
+            bonus += 5;
+            bonusNotes.add("공강 시간에 빠르게 먹기 좋은 메뉴입니다.(+5)");
         }
         if (PREFERRED.contains(menu)) {
-            score += 5;
-            extras.add("실제 학생 설문 선호 메뉴(초밥/국밥)라 해당 메뉴를 대표메뉴로 설정하는 것은 좋은 선택입니다.");
+            bonus += 5;
+            bonusNotes.add("해당 대표 메뉴는 학생 설문 선호 메뉴(초밥/국밥)이기에 이점이 있습니다.(+5)");
         }
+        score += bonus;
 
+        // 캡핑
         score = Math.max(MENU_MIN, Math.min(MENU_MAX, score));
 
-        // 가격 차이 멘트 (0%는 근사치 처리)
+        // summary 먼저
         double pct = Math.abs(diffRatio) * 100.0;
         boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내면 동일 취급
+        String priceSentence = nearlyZero
+                ? String.format("입력 가격 %,d원은 평균과 거의 동일합니다.", userPrice)
+                : String.format("입력 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
+                userPrice,
+                (diffRatio >= 0 ? "+" : "-"),
+                pct,
+                (diffRatio >= 0 ? "높은" : "낮은"));
+        String extraSentence = bonusNotes.isEmpty() ? "" : " " + String.join(" / ", bonusNotes);
 
-        String priceSentence;
-        if (nearlyZero) {
-            priceSentence = String.format("입력 가격 %,d원은 평균과 거의 동일합니다.", userPrice);
-        } else {
-            priceSentence = String.format(
-                    "입력 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
-                    userPrice,
-                    (diffRatio >= 0 ? "+" : "-"),
-                    pct,
-                    (diffRatio >= 0 ? "높은" : "낮은")
-            );
-        }
-
-        // 최종 reason 조합
-        String extraSentence = extras.isEmpty() ? "" : " " + String.join(" / ", extras);
-        String reason = String.format(
+        String summary = String.format(
                 "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s%s",
                 avg, priceSentence, extraSentence
         );
 
+        // 점수 산식은 뒤에
+        String breakdown = String.format(
+                "기본점수: %d%n" +
+                        "가격 가감: %+d (평균가 %,d원 대비 %s%.0f%%)%n" +
+                        "보너스 합계: %+d (%s)%n" +
+                        "최종점수: %d",
+                MENU_BASE_SCORE,
+                adjustByPrice, avg, (diffRatio >= 0 ? "+" : "-"), pct,
+                bonus, (bonusNotes.isEmpty() ? "-" : String.join(", ", bonusNotes)),
+                score
+        );
+
+        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
+
         return new AnalysisResponse.ScoreInfo("메뉴 적합성", score, null, reason);
     }
 
-    // ====== 최종 프롬프트(지금은 접근성/위치 점수만 반영됩니다) ======
+    private static String signed(int v) { return (v >= 0 ? "+" : "") + v; }
+
+    // 예산 적합성 층별 1평당 (보증금, 월세) 상수, 가격 단위는 "원/평"입니다
+    public record FloorPrice(int depositPerPy, int monthlyPerPy) {}
+
+    // 각 층별 1평당 보증금/월세 원
+    // B는 그냥 지하층 전부 다 포괄. 5층 이상이랑 루프탑/옥상은 별개.
+    // 실제 데이터에 루프탑이랑 지하는 없었어서 나머지를 기준으로 보수적으로 잡았습니다.
+    private static final Map<String, FloorPrice> PY_PRICE_BY_FLOOR = Map.of(
+            "B",    new FloorPrice(607_000, 34_000),
+            "1F",   new FloorPrice(3_540_000, 177_000),
+            "2F",   new FloorPrice(860_000, 43_000),
+            "3F",   new FloorPrice(720_000, 36_000),
+            "4F+",   new FloorPrice(680_000, 34_000),
+            "ROOF", new FloorPrice(516_000, 27_000)
+    );
+
+    // 우리 층 수 String으로 받아오는지 프론트에 물어보기
+    private String floorKeyFrom(Integer height) {
+        if (height < 0) return "B";
+        if (height == 1) return "1F";
+        if (height == 2) return "2F";
+        if (height == 3) return "3F";
+        if (height == 99) return "ROOF"; // 옥상/루프탑 고르면 99로 넘겨달라고 해야징
+        return "4F+";
+    }
+
+    // 만원 → 원 변환 (예: 150만원 => 1_500_000원)
+    private static long manToWon(Integer man) {
+        if (man == null) return 0L;
+        return man.longValue() * 10_000L;
+    }
+
+    // 원 → 만원 문자열 포맷 (콤마, 단위 포함)
+    private static String wonToManStr(long won) {
+        long man = Math.round(won / 10_000.0);
+        return String.format("%,d만원", man);
+    }
+
+    // 소수점 없는 퍼센트 문자열
+    private static String pct0(double v) {
+        return String.format("%.0f%%", v);
+    }
+
+    // "예산 적합성" 계산 로직
+    private AnalysisResponse.ScoreInfo calculateBudgetSuitabilityScore(AnalysisRequest request) {
+        // 방어: 필수 입력
+        if (request.size() == null || request.budget() == null) {
+            return new AnalysisResponse.ScoreInfo(
+                    "예산 적합성", 70, null,
+                    "면적 또는 월세 예산 정보가 부족해 보수적으로 평가했습니다."
+            );
+        }
+
+        // 입력 파라미터
+        Integer sizeMin = Optional.ofNullable(request.size().min()).orElse(0);   // 평
+        Integer sizeMax = Optional.ofNullable(request.size().max()).orElse(sizeMin);
+        Integer rentMinMan = Optional.ofNullable(request.budget().min()).orElse(0); // 만원
+        Integer rentMaxMan = Optional.ofNullable(request.budget().max()).orElse(rentMinMan);
+        Integer depoMinMan = request.deposit() == null ? 0 : Optional.ofNullable(request.deposit().min()).orElse(0);
+        Integer depoMaxMan = request.deposit() == null ? depoMinMan : Optional.ofNullable(request.deposit().max()).orElse(depoMinMan);
+
+        // 층 키 및 1평 단가
+        String floorKey = floorKeyFrom(request.height());
+        FloorPrice fp = PY_PRICE_BY_FLOOR.getOrDefault(floorKey, PY_PRICE_BY_FLOOR.get("1F"));
+
+        // 예상 총 월세/보증금 (원) : (단가 원/평) × (평수)
+        long expRentMin  = (long) fp.monthlyPerPy() * sizeMin;
+        long expRentMax  = (long) fp.monthlyPerPy() * sizeMax;
+        long expRentMid  = Math.round((expRentMin + expRentMax) / 2.0);
+
+        long expDepoMin  = (long) fp.depositPerPy() * sizeMin;
+        long expDepoMax  = (long) fp.depositPerPy() * sizeMax;
+        long expDepoMid  = Math.round((expDepoMin + expDepoMax) / 2.0);
+
+        // 사용자 예산(만원) → 원
+        long userRentMax = manToWon(rentMaxMan);
+        long userDepoMax = manToWon(depoMaxMan);
+
+        // 점수 규칙 (월세/보증금 각각 채점, 가중합)
+        int base = 90, minScore = 10, maxScore = 100;
+
+        int rentDelta = scoreDeltaAgainstRange(userRentMax, expRentMin, expRentMid, expRentMax);
+        int depoDelta = scoreDeltaAgainstRange(userDepoMax, expDepoMin, expDepoMid, expDepoMax);
+
+        // 가중합: 월세 70%, 보증금 30%
+        int score = base + (int) Math.round(rentDelta * 0.7 + depoDelta * 0.3);
+        score = Math.max(minScore, Math.min(maxScore, score));
+
+        // 이유(멘트 정해놓고 값 넣어서 주기)
+        String summary = String.format(
+                "해당 지역의 요청 층수 %s 기준 1평당 예상 단가는 보증금 %,d원/월세 %,d원입니다. " +
+                        "희망 면적 %d~%d평을 적용할 때 예상 총 월세는 %s - %s(중앙값 %s), 보증금은 %s~%s(중앙값 %s)로 추정됩니다. " +
+                        "입력 예산은 월세 최대 %s, 보증금 최대 %s이며, 이를 기준으로 월세 적합도 %s, 보증금 적합도 %s로 평가했습니다.",
+                floorKey, fp.depositPerPy(), fp.monthlyPerPy(),
+                sizeMin, sizeMax,
+                wonToManStr(expRentMin), wonToManStr(expRentMax), wonToManStr(expRentMid),
+                wonToManStr(expDepoMin), wonToManStr(expDepoMax), wonToManStr(expDepoMid),
+                String.format("%,d만원", rentMaxMan), String.format("%,d만원", depoMaxMan),
+                subScoreLabel(userRentMax, expRentMin, expRentMid, expRentMax),
+                subScoreLabel(userDepoMax, expDepoMin, expDepoMid, expDepoMax)
+        );
+
+        // 예산 적합도 점수 산식 추가
+        String breakdown = String.format(
+                "기본점수: %d\n" +
+                        "월세 가감: %+d (사용자 최대 %s vs 예상 %s~%s~%s)\n" +
+                        "보증금 가감: %+d (사용자 최대 %s vs 예상 %s~%s~%s)\n" +
+                        "점수 비중: 월세×70%% / 보증금×30%%\n" +
+                        "최종점수: %d",
+                base,
+                rentDelta, String.format("%,d만원", rentMaxMan), wonToManStr(expRentMin), wonToManStr(expRentMid), wonToManStr(expRentMax),
+                depoDelta, String.format("%,d만원", depoMaxMan), wonToManStr(expDepoMin), wonToManStr(expDepoMid), wonToManStr(expDepoMax),
+                score
+        );
+
+        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
+        return new AnalysisResponse.ScoreInfo("예산 적합성", score, null, reason);
+    }
+
+    /**
+     * 사용자 최대치(userMax)를 예상 구간과 비교해 점수 증감을 반환
+     *  - userMax >= expMax : +10
+     *  - userMax >= expMid : +5
+     *  - userMax >= expMin :  0
+     *  - userMax  < expMin : 부족비율 10% 당 -5 (최소 -30까지)
+     */
+    private int scoreDeltaAgainstRange(long userMax, long expMin, long expMid, long expMax) {
+        if (userMax >= expMax) return +10;
+        if (userMax >= expMid) return +5;
+        if (userMax >= expMin) return 0;
+
+        // 부족비율 (expMin 대비)
+        double gap = (expMin - userMax) / (double) expMin; // 0~1+
+        int steps = (int) Math.ceil(gap / 0.10);           // 10% 단위
+        return Math.max(-30, -5 * steps);
+    }
+
+    // 서브 라벨: 사용자 최대가 구간 어디에 있는지 표현
+    private String subScoreLabel(long userMax, long expMin, long expMid, long expMax) {
+        if (userMax >= expMax) return "충분(상한 이상)";
+        if (userMax >= expMid) return "양호(중앙값 이상)";
+        if (userMax >= expMin) return "가능(최소값 이상)";
+        double gap = (expMin - userMax) / (double) expMin;
+        return "부족(" + pct0(gap * 100) + " 부족)";
+    }
+
+    private static double ratingAsDouble(Review r) {
+        BigDecimal bd = r.getRating();
+        return (bd == null) ? 0.0 : bd.doubleValue();
+    }
+
+    // 리뷰 분석
+    private AnalysisResponse.ReviewAnalysis buildReviewAnalysisSameCategory(String targetCategory) {
+        // 동종업계 가게 전부 수집
+        List<String> keywords = expandCategoryKeywords(Optional.ofNullable(targetCategory).orElse("").trim());
+        List<Restaurant> sameCategoryAll = restaurantRepository.findAll().stream()
+                .filter(r -> {
+                    String c = Optional.ofNullable(r.getCategory()).orElse("").toLowerCase();
+                    return keywords.stream().anyMatch(c::contains);
+                })
+                .toList();
+
+        if (sameCategoryAll.isEmpty()) {
+            return new AnalysisResponse.ReviewAnalysis(
+                    null,
+                    List.of(),
+                    "해당 카테고리의 가게가 없어 리뷰 기반 피드백을 제공하기 어렵습니다."
+            );
+        }
+
+        // 동종업계 집합 만들고, placeId로 1차 리뷰 조회
+        Set<String> nameSet = sameCategoryAll.stream()
+                .map(Restaurant::getRestaurantName)
+                .filter(Objects::nonNull)
+                .map(this::normalizeName)
+                .collect(Collectors.toSet());
+
+        List<Long> ids = sameCategoryAll.stream()
+                .map(Restaurant::getKakaoPlaceId)
+                .filter(Objects::nonNull)
+                .toList();
+
+        List<Review> reviews = ids.isEmpty()
+                ? List.of()
+                : reviewRepository.findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(ids);
+
+        // placeId가 비어있는 데이터가 있다면, 이름 일치로 한 번 더 거르기(안전빵)
+        List<Review> sameNameReviews = reviews.stream()
+                .filter(r -> {
+                    String nm = Optional.ofNullable(r.getRestaurant())
+                            .map(Restaurant::getRestaurantName).orElse(null);
+                    return nm != null && nameSet.contains(normalizeName(nm));
+                })
+                .toList();
+
+        List<Review> base = sameNameReviews.isEmpty() ? reviews : sameNameReviews;
+        if (base.isEmpty()) {
+            return new AnalysisResponse.ReviewAnalysis(
+                    null,
+                    List.of(),
+                    "해당 카테고리의 리뷰 데이터가 없어 리뷰 기반 피드백을 제공하기 어렵습니다."
+            );
+        }
+
+        // 카테고리 전체 평균 평점
+        double avg = base.stream().map(Review::getRating).filter(Objects::nonNull).mapToDouble(java.math.BigDecimal::doubleValue).average().orElse(Double.NaN);
+        Double averageRating = Double.isNaN(avg) ? null : Math.round(avg * 10.0) / 10.0;
+
+        // GPT한테 도움 되는 리뷰 4개, 피드백만 json으로 받아오기(피드백 내용 만들때는 모든 리뷰 다 씀)
+        // 모든 리뷰를 넘기되, 한 줄로 정제하고 220자 넘는건 컷
+        String lines = base.stream()
+                .map(r -> {
+                    String store = Optional.ofNullable(r.getRestaurant())
+                            .map(Restaurant::getRestaurantName).orElse("(이름없음)");
+                    double score = ratingOf(r); // BigDecimal -> double
+                    String content = safeLine(Optional.ofNullable(r.getContent()).orElse(""));
+                    if (content.length() > 220) content = content.substring(0, 220) + "…";
+                    return String.format("- [%s | %.1f] %s", store, score, content);
+                })
+                .collect(Collectors.joining("\n"));
+
+        String prompt = """
+                # Role: Review analysis coach
+                # Task:
+                - You are analyzing reviews for the "%s" category in a **university-area** business context.
+                - From ALL reviews below, pick about **4** samples that would most help a prospective owner.
+                - Then provide **concise, practical feedback** (in Korean) for running a successful business in this category and area.
+                
+                # Output rules (MUST):
+                - **Write ALL output in Korean.**
+                - Return **pure JSON only** (no code block, no extra text).
+                - For each item in "reviewSamples":
+                  - Keep "storeName" as-is (가게명).
+                  - "reviewScore" must be a number (0.0~5.0).
+                  - "highlights" must be **an array with exactly ONE sentence** (1줄 요약, 구어체로).
+                    - Remove emojis/repeat chars like ㅋㅋ/ㅎㅎ/ㅠㅠ, URLs, hashtags, @mentions.
+                    - Normalize spacing/punctuation.
+                    - Keep it within **80 characters** and end with a period.
+                - In "feedback":
+                  - **Do not mention any store names**.
+                  - give university-area–aware advice (예: 학생 피크타임 운영, 가성비/포션, 회전율, 소음/분위기, 연령대·모임 수요 등).
+                  - 내가 준 모든 리뷰 내용을 고려하여 관련된 조언을 해주고(특히 reviewSamples에 나온 내용 관련해선 꼭 언급해줘)
+                  - 한국인들의 친근감이 들 수 있게 친절한 상담사처럼 "~요"체로 말해줘.
+                  - 너무 내용이 적은 것 같으면 좀 더 너가 서칭해보고 관련 업계 팁을 4줄정도는 양을 채워줘.
+                
+                # JSON schema:
+                {
+                  "reviewSamples": [
+                    {"storeName": "가게명", "reviewScore": 4.5, "highlights": ["한 줄 요약."]}
+                  ],
+                  "feedback": "종합 피드백 (한국어)"
+                }
+                
+                # Reviews
+                %s
+                """.formatted(targetCategory, lines);
+
+        List<AnalysisResponse.ReviewSample> samples;
+        String feedback;
+        try {
+            String raw = aiChatService.getAnalysisResponseFromAI(prompt)
+                    .replace("```", "").trim();
+
+            // GPT 응답 파싱용 임시 레코드
+            record Out(List<Map<String, Object>> reviewSamples, String feedback) {}
+            Out out = objectMapper.readValue(raw, Out.class);
+
+            // 안전 매핑: storeName, reviewScore, highlights
+            samples = Optional.ofNullable(out.reviewSamples())
+                    .orElse(List.of())
+                    .stream()
+                    .limit(4)
+                    .map(m -> {
+                        String store = String.valueOf(m.getOrDefault("storeName", "(이름없음)"));
+                        double score2;
+                        try { score2 = Double.parseDouble(String.valueOf(m.getOrDefault("reviewScore", 0.0))); }
+                        catch (Exception e) { score2 = 0.0; }
+                        @SuppressWarnings("unchecked")
+                        List<String> hl = (List<String>) m.getOrDefault("highlights", List.of());
+                        if (hl == null) hl = List.of();
+                        return new AnalysisResponse.ReviewSample(store, score2, hl);
+                    })
+                    .toList();
+
+            feedback = Optional.ofNullable(out.feedback()).orElse("리뷰를 바탕으로 운영 팁을 요약했습니다.");
+        }
+        catch (Exception e) {
+            // 파싱 실패 시: 단순 샘플 4개 + 기본 피드백
+            samples = base.stream().limit(4)
+                    .map(r -> new AnalysisResponse.ReviewSample(
+                            Optional.ofNullable(r.getRestaurant()).map(Restaurant::getRestaurantName).orElse("(이름없음)"),
+                            ratingOf(r),
+                            List.of(snippet(r.getContent(), 80))
+                    ))
+                    .toList();
+            feedback = "리뷰 내용을 참고해 메뉴 품질 일관성, 피크타임 대기 관리, 직원 응대 매뉴얼(인사/설명/불만 응대), 위생·청결체크리스트를 체계화하세요. 상권 피드백이 반복되는 항목은 우선순위로 개선하세요.";
+        }
+        return new AnalysisResponse.ReviewAnalysis(
+                averageRating,
+                samples,
+                feedback
+        );
+    }
+
+    // 리뷰 로직 헬퍼
+    private double ratingOf(Review r) {
+        java.math.BigDecimal b = r.getRating();
+        return (b == null) ? 0.0 : b.doubleValue();
+    }
+    private String normalizeName(String s) {
+        return Optional.ofNullable(s).orElse("").replaceAll("\\s+", "").toLowerCase();
+    }
+    // 리뷰 내용 짧게 자르는 유틸
+    private String snippet(String s, int max) {
+        if (s == null) return "";
+        String oneLine = s.replaceAll("\\s+", " ").trim();
+        return oneLine.length() <= max ? oneLine : oneLine.substring(0, max) + "…";
+    }
+    // 프롬프트/로그 안전용: 개행/탭 제거,트림
+    private String safeLine(String s) {
+        if (s == null) return "";
+        return s.replace("\n", " ").replace("\r", " ").replace("\t", " ").trim();
+    }
+
+
+    // 최종 프롬프트
     private String createSimpleFinalReportPrompt(AnalysisRequest request, List<AnalysisResponse.ScoreInfo> scores, List<Review> reviews) {
         String scoreInfo = scores.stream()
                 .map(s -> String.format("- %s: %d점 (%s)", s.name(), s.score(), s.reason()))
@@ -335,29 +675,26 @@ public class AnalysisService {
             ## 출력 규칙
             - 순수 JSON (코드블록 금지)
             - 숫자는 따옴표 없이, 텍스트는 따옴표로
+            - "reviewAnalysis.reviewSamples"는 **반드시 객체 배열**이어야 함. 문자열 금지.
+               각 원소 형식: { "storeName": "가게명", "reviewScore": 4.5, "highlights": ["요약문1","요약문2"] }
             {
               "scores": [
                 {"name": "접근성", "score": %d, "expectedPrice": null, "reason": "%s"},
-                {"name": "예산", "score": %d, "expectedPrice": null, "reason": "예산 관련 상세 분석..."},
+                {"name": "예산", "score": %d, "expectedPrice": null, "reason": "%s"},
                 {"name": "메뉴 적합성", "score": %d, "expectedPrice": null, "reason": "%s"}
               ],
               "reviewAnalysis": {
-                "summary": "주변 리뷰 종합 분석...",
-                "positiveKeywords": ["키워드1", "키워드2"],
-                "negativeKeywords": ["키워드3", "키워드4"],
-                "reviewSamples": []
-              },
-              "tips": [
-                {"type": "success", "message": "성공 요인 조언..."},
-                {"type": "warning", "message": "주의사항 조언..."},
-                {"type": "info", "message": "참고사항 조언..."}
-              ]
+                "averageRating": null,
+                "reviewSamples": [],
+                "feedback": "유사업종 리뷰를 바탕으로 종합한 요약/피드백을 간결하게 작성"
+              }
+       
             }
             """,
                 request.addr(), request.category(),
                 scoreInfo, reviewInfo,
                 scores.get(0).score(), escapeForJson(scores.get(0).reason()),
-                scores.get(1).score(),
+                scores.get(1).score(), escapeForJson(scores.get(1).reason()),
                 scores.get(2).score(), escapeForJson(scores.get(2).reason())
         );}
 
@@ -377,13 +714,9 @@ public class AnalysisService {
                 "갤러리카페","테마카페","무인카페","생과일전문점","전통찻집",
                 "아이스크림","빙수","디저트","도넛","브런치카페","커피"));
 
-        // 치킨
-        bucket.put("치킨", Arrays.asList(
-                "치킨","닭강정","양념치킨"));
-
-        // 피자
-        bucket.put("피자", Arrays.asList(
-                "피자"));
+        // 피자/치킨
+        bucket.put("피자/치킨", Arrays.asList(
+                "피자","치킨","닭강정","양념치킨"));
 
         // 패스트푸드 (간편식 포함)
         bucket.put("패스트푸드", Arrays.asList(
@@ -401,8 +734,7 @@ public class AnalysisService {
         // 아시안 (태국/베트남/인도 등 동남아/남아시아 계열)
         bucket.put("아시안", Arrays.asList(
                 "아시안","아시아","태국","베트남","쌀국수","포","인도","카레",
-                "말레이","싱가포르","샤브샤브" // 향후 확장 대비
-        ));
+                "말레이","싱가포르","샤브샤브"));
 
         // 양식 (이탈리안/스테이크/브라질, 멕시칸 포함 — JSON에 존재)
         bucket.put("양식", Arrays.asList(
@@ -411,11 +743,16 @@ public class AnalysisService {
 
         // 중식
         bucket.put("중식", Arrays.asList(
-                "중식","중국","중국요리","마라","짬뽕","짜장","훠궈"));
+                "중식","중국","중국요리","마라","짬뽕","짜장면","훠궈"));
 
         // 일식
         bucket.put("일식", Arrays.asList(
                 "일식","돈까스,우동","돈까스","우동","라멘","라면","스시","초밥","퓨전일식","연어"));
+
+        // 주점/술집 (신규)
+        bucket.put("주점/술집", Arrays.asList(
+                "주점","실내포장마차","호프,요리주점","오뎅바","술집"));
+
 
         // 입력 대분류에 따라 매칭 키워드 생성
         Set<String> set = new LinkedHashSet<>();
@@ -425,7 +762,7 @@ public class AnalysisService {
                 if (k.equalsIgnoreCase(c)) set.addAll(v);
             });
 
-            // 혹시 사용자가 "카페" 같은 단어로만 보내는 경우도 커버
+            // 혹시 사용자가 "카페" 같은 단어로만 보내는 경우도 커버(근데 아마 드랍다운으로 강제할거라 괜찮을듯. 이거 아래 if문까지도.
             bucket.forEach((k, v) -> {
                 if (k.toLowerCase().contains(c) || c.contains(k.toLowerCase())) set.addAll(v);
             });
@@ -456,5 +793,4 @@ public class AnalysisService {
     }
 
     private String safeName(Restaurant r) { return Optional.ofNullable(r.getRestaurantName()).orElse("(이름없음)"); }
-    private String safeCat(Restaurant r) { return Optional.ofNullable(r.getCategory()).orElse("(카테고리없음)"); }
 }

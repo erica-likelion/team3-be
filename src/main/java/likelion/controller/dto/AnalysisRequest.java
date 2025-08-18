@@ -9,6 +9,7 @@ public record AnalysisRequest(
         String category, // "중식","카페"
         String marketingArea, // 대학가/학교 주변
         MinMax budget, // 만원. 월세 예산
+        MinMax deposit, // 만원. 보증금 예산
         String managementMethod, // "홀 영업 위주"
         String representativeMenuName, // 추가: 대표 메뉴명
         Integer representativeMenuPrice, // 추가: 대표 메뉴 가격 (원)
