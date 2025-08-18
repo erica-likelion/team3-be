@@ -36,21 +36,15 @@ public record AnalysisResponse(
             List<String> highlights
     ) {}
 
-    //상세 분석 정보를 담을 record추가(경쟁업체_리스트로, 해당 상권 소비자 특성 분석)
+    // 상세 분석(각 항목들 상세분석 리스트로)
     public record DetailAnalysis(
-            List<CompetitorInfo> competitors,
-            String consumerProfileAnalysis
+            List<DetailSection> sections
     ) {}
 
-    //경쟁업체들의 정보를 담을 record
-    public record CompetitorInfo(
-            String storeName,
-            String category,
-            String address,
-            double rating,
-            int reviewCount,
-            int distance, // 사용자가 입력한 위치로부터의 거리
-            String representativeMenu, // 대표메뉴랑 가격은 ai한테 맡기기
-            int estimatedPrice
+
+    // 각 상세 분석 내용들
+    public record DetailSection(
+            String name,
+            String content
     ) {}
 }
