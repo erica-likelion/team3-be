@@ -32,6 +32,8 @@ public class AnalysisService {
             String reason
     ) {}
 
+
+    // ========================= 분석 메서드들 실행하고 반환하는 곳 ============================
     public AnalysisResponse analyze(AnalysisRequest request) {
         // addr: "위도, 경도"
         String[] locationParts = request.addr().split(",");
@@ -79,22 +81,18 @@ public class AnalysisService {
         scores.add(calculateBudgetSuitabilityScore(request));
         scores.add(calculateMenuSuitabilityScore(request));
 
-        // ★ 동종업계 리뷰 분석 생성(반경 무관, 같은 카테고리 전체)
-        AnalysisResponse.ReviewAnalysis reviewAnalysis =
-                buildReviewAnalysisSameCategory(targetCategory);
+        // 동종업계 리뷰 분석 생성(반경 무관, 같은 카테고리 전체)
+        AnalysisResponse.ReviewAnalysis reviewAnalysis = buildReviewAnalysisSameCategory(targetCategory);
+
+        // 상세분석 생성: 사용자 인풋 + 점수 reason만 활용해서 일단 최소기능만 구현
+        AnalysisResponse.DetailAnalysis detailAnalysis = buildDetailAnalysis(request, scores);
 
         // scores: 3가지 항목 점수 관련, reviewAnalysis: 리뷰 관련, detailAnalysis: 상세 분석 관련
-        return new AnalysisResponse(
-                scores,
-                reviewAnalysis,
-                null            // detailAnalysis는 추후 확장
-        );
+        return new AnalysisResponse(scores, reviewAnalysis, detailAnalysis);
     }
 
-    // "위치/접근성" 계산 로직
-    private LocationScoreFactors calculateLocationScore(AnalysisRequest request,
-                                                        double latitude, double longitude,
-                                                        List<Restaurant> competitorsInRadius) {
+    // ============================= "위치/접근성" 계산 로직 ===========================
+    private LocationScoreFactors calculateLocationScore(AnalysisRequest request, double latitude, double longitude, List<Restaurant> competitorsInRadius) {
         int base = 90;
         int score = base;
 
@@ -162,7 +160,7 @@ public class AnalysisService {
         return (v >= 0 ? "+" : "") + v;
     }
 
-    // ====== 사용자 설명에 보낼 멘트(위치 점수 관련) ======
+    // ======================== 사용자 설명에 보낼 멘트(위치 점수 관련) ========================
     private String generateLocationReason(double distance, int floor, long competitorCount, List<String> competitorNamesWithDist) {
         StringBuilder sb = new StringBuilder();
         if (distance <= 30) sb.append(String.format("정문과 매우 가까워(약 %.0fm) 접근성이 우수합니다. ", distance));
@@ -244,7 +242,7 @@ public class AnalysisService {
         return null;
     }
 
-    // "메뉴 적합성 점수 로직"
+    // ================================= "메뉴 적합성 점수 로직" ======================================
     private AnalysisResponse.ScoreInfo calculateMenuSuitabilityScore(AnalysisRequest request) {
         String menu = request.representativeMenuName();
         Integer userPrice = request.representativeMenuPrice(); // 단위: 원 (프론트 입력 기준)
@@ -366,7 +364,7 @@ public class AnalysisService {
         return String.format("%.0f%%", v);
     }
 
-    // "예산 적합성" 계산 로직
+    // =========================== "예산 적합성" 계산 로직 ================================
     private AnalysisResponse.ScoreInfo calculateBudgetSuitabilityScore(AnalysisRequest request) {
         // 방어: 필수 입력
         if (request.size() == null || request.budget() == null) {
@@ -558,7 +556,7 @@ public class AnalysisService {
                   - Keep "storeName" as-is (가게명).
                   - "reviewScore" must be a number (0.0~5.0).
                   - "highlights" must be **an array with exactly ONE sentence** (1줄 요약, 구어체로).
-                    - Remove emojis/repeat chars like ㅋㅋ/ㅎㅎ/ㅠㅠ, URLs, hashtags, @mentions.
+                    - **Remove emojis/repeat chars like ㅋㅋ/ㅎㅎ/ㅠㅠ, URLs, hashtags, @mentions.**
                     - Normalize spacing/punctuation.
                     - Keep it within **80 characters** and end with a period.
                 - In "feedback":
@@ -647,6 +645,158 @@ public class AnalysisService {
         return s.replace("\n", " ").replace("\r", " ").replace("\t", " ").trim();
     }
 
+    // ==================================== 상세분석 관련 로직 =========================================
+    private AnalysisResponse.DetailAnalysis buildDetailAnalysis(
+            AnalysisRequest req,
+            List<AnalysisResponse.ScoreInfo> scores
+    ) {
+        // ai한테 상세 분석에는 사용자가 입력한 인풋이랑 1차 분석에서 나온 점수 이유 넘겨줄거임
+        // 사용자 인풋 요약
+        String floorKey = floorKeyFrom(req.height());
+        String sizeStr = (req.size() == null) ? "미입력"
+                : String.format("%s~%s평",
+                Optional.ofNullable(req.size().min()).orElse(0),
+                Optional.ofNullable(req.size().max()).orElse(0));
+        String rentStr = (req.budget() == null) ? "미입력"
+                : String.format("%s~%s만원",
+                Optional.ofNullable(req.budget().min()).orElse(0),
+                Optional.ofNullable(req.budget().max()).orElse(0));
+        String depoStr = (req.deposit() == null) ? "미입력"
+                : String.format("%s~%s만원",
+                Optional.ofNullable(req.deposit().min()).orElse(0),
+                Optional.ofNullable(req.deposit().max()).orElse(0));
+        String menuStr = (req.representativeMenuName() == null) ? "미선택"
+                : String.format("%s(%,d원)", req.representativeMenuName(),
+                Optional.ofNullable(req.representativeMenuPrice()).orElse(0));
+
+        String inputSummary = """
+        - 위치 좌표: %s
+        - 업종 카테고리: %s
+        - 상권 타입: %s
+        - 희망 면적: %s
+        - 희망 층수: %s
+        - 월세 예산: %s
+        - 보증금 예산: %s
+        - 대표메뉴: %s
+        """.formatted(
+                Optional.ofNullable(req.addr()).orElse("미입력"),
+                Optional.ofNullable(req.category()).orElse("미입력"),
+                Optional.ofNullable(req.marketingArea()).orElse("미입력"),
+                sizeStr, floorKey, rentStr, depoStr, menuStr
+        ).trim();
+
+        // 점수 사유를 항목별로 꺼내기(이름으로 매칭)
+        String reasonAccess = findReason(scores, "접근성");
+        String reasonBudget = findReason(scores, "예산 적합성"); // DTO/프론트 표기에 맞춰 사용
+        // if (reasonBudget.isBlank()) reasonBudget = findReason(scores, "예산");
+        String reasonMenu   = findReason(scores, "메뉴 적합성");
+
+        // 프롬프트
+        String prompt = """
+        # Role: Senior retail consultant for **university-area** businesses
+        # Task:
+        - Based ONLY on the user's inputs and the three score reasons below,
+          write a **detailed Korean analysis** for each of:
+            1) 접근성
+            2) 예산 적합성
+            3) 메뉴 적합성
+        - For each section, explain why the score likely came out that way,
+          and give concrete, prioritized tips to raise the score.
+        - Always consider it's a **university-area** (student traffic, peak hours, price sensitivity, group demand, quick turns).
+
+        # Output rules (MUST):
+        - **Write ALL output in Korean.**
+        - Return **pure JSON only** (no code blocks, no extra text).
+        - Structure:
+          {
+            "sections": [
+              {"name": "접근성", "content": "문단 텍스트"},
+              {"name": "예산 적합성", "content": "문단 텍스트"},
+              {"name": "메뉴 적합성", "content": "문단 텍스트"}
+            ]
+          }
+        - Content should be concise but practical, with quick wins(단기), mid-term(중기), risk watch-outs(리스크)을 포함해도 좋음.
+        - Do **not** mention any specific competitor store names.
+
+        [User Inputs]
+        %s
+
+        [Score Reasons]
+        - 접근성: %s
+        - 예산 적합성: %s
+        - 메뉴 적합성: %s
+        """.formatted(
+                inputSummary,
+                oneLine(reasonAccess, 500),
+                oneLine(reasonBudget, 500),
+                oneLine(reasonMenu,   500)
+        );
+
+        try {
+            String raw = aiChatService.getAnalysisResponseFromAI(prompt)
+                    .replace("```", "").trim();
+
+            // 파싱용 임시 레코드
+            record SectionOut(String name, String content) {}
+            record DetailOut(List<SectionOut> sections) {}
+
+            DetailOut out = objectMapper.readValue(raw, DetailOut.class);
+
+            List<AnalysisResponse.DetailSection> sections = Optional.ofNullable(out.sections())
+                    .orElse(List.of())
+                    .stream()
+                    .filter(s -> s != null && s.name() != null && s.content() != null)
+                    .map(s -> new AnalysisResponse.DetailSection(s.name(), s.content().trim()))
+                    .toList();
+
+            if (sections.isEmpty()) {
+                sections = fallbackSections(reasonAccess, reasonBudget, reasonMenu);
+            }
+            return new AnalysisResponse.DetailAnalysis(sections);
+
+        } catch (Exception e) {
+            return new AnalysisResponse.DetailAnalysis(
+                    fallbackSections(reasonAccess, reasonBudget, reasonMenu)
+            );
+        }
+    }
+
+    // 점수 리스트에서 이름으로 reason 찾기
+    private String findReason(List<AnalysisResponse.ScoreInfo> scores, String name) {
+        if (scores == null) return "";
+        return scores.stream()
+                .filter(s -> name.equals(s.name()))
+                .map(AnalysisResponse.ScoreInfo::reason)
+                .findFirst()
+                .orElse("");
+    }
+
+    // 파싱 실패/빈값 대비 상세분석 디폴트값
+    private List<AnalysisResponse.DetailSection> fallbackSections(String r1, String r2, String r3) {
+        return List.of(
+                new AnalysisResponse.DetailSection(
+                        "접근성",
+                        "접근성 점수 사유를 바탕으로 간판·가시성, 정문 동선, 피크타임 회전율을 우선 점검하세요. " +
+                                "야간 조명, 배너·윈도우사인, 네비/지도상 표기 최적화 등 즉시 실행 가능한 항목부터 개선하면 효과가 큽니다. 사유: " + oneLine(r1, 200)
+                ),
+                new AnalysisResponse.DetailSection(
+                        "예산 적합성",
+                        "면적·층수·임대단가를 다시 매칭해 월세/보증금 한도 내 대안을 도출하세요. " +
+                                "필요시 면적 축소·층수 유연화, 보증금/임대료 조건 재협상, 초기비용 분산(리스·중고설비)을 검토합니다. 사유: " + oneLine(r2, 200)
+                ),
+                new AnalysisResponse.DetailSection(
+                        "메뉴 적합성",
+                        "대표메뉴 가격은 대학가 평균 대비 포지셔닝(가성비/프리미엄)을 명확히 하고 구성을 최적화하세요. " +
+                                "학생 선호와 회전율을 고려해 세트/런치/빠른 메뉴를 강화하면 전환이 개선됩니다. 사유: " + oneLine(r3, 200)
+                )
+        );
+    }
+
+    private String oneLine(String s, int max) {
+        if (s == null) return "";
+        String t = s.replaceAll("\\s+", " ").trim();
+        return (t.length() <= max) ? t : t.substring(0, max) + "…";
+    }
 
     // 최종 프롬프트
     private String createSimpleFinalReportPrompt(AnalysisRequest request, List<AnalysisResponse.ScoreInfo> scores, List<Review> reviews) {
