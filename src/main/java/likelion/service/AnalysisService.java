@@ -513,6 +513,8 @@ public class AnalysisService {
             ## 출력 규칙
             - 순수 JSON (코드블록 금지)
             - 숫자는 따옴표 없이, 텍스트는 따옴표로
+            - "reviewAnalysis.reviewSamples"는 **반드시 객체 배열**이어야 함. 문자열 금지.
+               각 원소 형식: { "storeName": "가게명", "reviewScore": 4.5, "highlights": ["요약문1","요약문2"] }
             {
               "scores": [
                 {"name": "접근성", "score": %d, "expectedPrice": null, "reason": "%s"},
@@ -575,8 +577,7 @@ public class AnalysisService {
         // 아시안 (태국/베트남/인도 등 동남아/남아시아 계열)
         bucket.put("아시안", Arrays.asList(
                 "아시안","아시아","태국","베트남","쌀국수","포","인도","카레",
-                "말레이","싱가포르","샤브샤브" // 향후 확장 대비
-        ));
+                "말레이","싱가포르","샤브샤브"));
 
         // 양식 (이탈리안/스테이크/브라질, 멕시칸 포함 — JSON에 존재)
         bucket.put("양식", Arrays.asList(
@@ -590,6 +591,11 @@ public class AnalysisService {
         // 일식
         bucket.put("일식", Arrays.asList(
                 "일식","돈까스,우동","돈까스","우동","라멘","라면","스시","초밥","퓨전일식","연어"));
+
+        // 주점/술집 (신규)
+        bucket.put("주점/술집", Arrays.asList(
+                "주점","실내포장마차","호프,요리주점","오뎅바","술집"));
+
 
         // 입력 대분류에 따라 매칭 키워드 생성
         Set<String> set = new LinkedHashSet<>();

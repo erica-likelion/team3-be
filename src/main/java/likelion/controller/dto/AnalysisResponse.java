@@ -24,11 +24,11 @@ public record AnalysisResponse(
             Integer securityDeposit
     ) {}
 
+    // 피그마 내용 바탕으로 수정
     public record ReviewAnalysis(
-            String summary,
-            List<String> positiveKeywords,
-            List<String> negativeKeywords,
-            List<ReviewSample> reviewSamples
+            Double averageRating,             // 유사업종 평균 평점 (리뷰가 없으면 null)
+            List<ReviewSample> reviewSamples, // 대표 리뷰
+            String feedback // 리뷰 피드백
     ) {}
 
     public record ReviewSample(
