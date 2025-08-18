@@ -326,12 +326,10 @@ public class AnalysisService {
                 "기본점수: %d%n" +
                         "가격 가감: %+d (평균가 %,d원 대비 %s%.0f%%)%n" +
                         "보너스 합계: %+d (%s)%n" +
-                        "캡핑 범위: %d~%d%n" +
                         "최종점수: %d",
                 MENU_BASE_SCORE,
                 adjustByPrice, avg, (diffRatio >= 0 ? "+" : "-"), pct,
                 bonus, (bonusNotes.isEmpty() ? "-" : String.join(", ", bonusNotes)),
-                MENU_MIN, MENU_MAX,
                 score
         );
 
@@ -557,13 +555,9 @@ public class AnalysisService {
                 "갤러리카페","테마카페","무인카페","생과일전문점","전통찻집",
                 "아이스크림","빙수","디저트","도넛","브런치카페","커피"));
 
-        // 치킨
-        bucket.put("치킨", Arrays.asList(
-                "치킨","닭강정","양념치킨"));
-
-        // 피자
-        bucket.put("피자", Arrays.asList(
-                "피자"));
+        // 피자/치킨
+        bucket.put("피자/치킨", Arrays.asList(
+                "피자","치킨","닭강정","양념치킨"));
 
         // 패스트푸드 (간편식 포함)
         bucket.put("패스트푸드", Arrays.asList(
@@ -605,7 +599,7 @@ public class AnalysisService {
                 if (k.equalsIgnoreCase(c)) set.addAll(v);
             });
 
-            // 혹시 사용자가 "카페" 같은 단어로만 보내는 경우도 커버
+            // 혹시 사용자가 "카페" 같은 단어로만 보내는 경우도 커버(근데 아마 드랍다운으로 강제할거라 괜찮을듯. 이거 아래 if문까지도.
             bucket.forEach((k, v) -> {
                 if (k.toLowerCase().contains(c) || c.contains(k.toLowerCase())) set.addAll(v);
             });
