@@ -6,7 +6,6 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 public record AnalysisResponse(
         List<ScoreInfo> scores,
         ReviewAnalysis reviewAnalysis,
-        List<Tip> tips,
 
         // 분석 상세보기를 위한 dto 추가
         DetailAnalysis detailAnalysis
@@ -35,11 +34,6 @@ public record AnalysisResponse(
             String storeName,
             double reviewScore,
             List<String> highlights
-    ) {}
-
-    public record Tip(
-            String type,
-            String message
     ) {}
 
     //상세 분석 정보를 담을 record추가(경쟁업체_리스트로, 해당 상권 소비자 특성 분석)

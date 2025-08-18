@@ -12,10 +12,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
-import java.io.IOException;
 import java.text.DecimalFormat;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.math.BigDecimal;
 
 @Service
 @RequiredArgsConstructor
@@ -27,12 +27,8 @@ public class AnalysisService {
     private final ObjectMapper objectMapper;
 
     // 위치 점수 계산 결과
-    private record LocationScoreFactors(
-            int score,
-            double distanceToMainGate,
-            int floor,
-            long competitorCount,
-            List<String> competitorNames, // "가게명(거리m)" 형태
+    private record LocationScoreFactors(int score, double distanceToMainGate,
+            int floor, long competitorCount, List<String> competitorNames, // "가게명(거리m)" 형태
             String reason
     ) {}
 
@@ -56,7 +52,7 @@ public class AnalysisService {
                 .filter(r -> DistanceCalc.calculateDistance(latitude, longitude, r.getLatitude(), r.getLongitude()) <= radiusM)
                 .collect(Collectors.toList());
 
-        // 업종(문자열) 기반 동종업계 1차 필터 (아래에 카테고라-json 키워드 매핑 코드 있습니다), (동종업계는 위치/접근성 및 메뉴 가격 적합도에 사용할 예정)
+        // 업종(문자열) 기반 동종업계 1차 필터 (아래에 카테고리-json의 키워드 매핑 코드 있습니다), (동종업계는 위치/접근성에 사용)
         String targetCategory = Optional.ofNullable(request.category()).orElse("").trim();
         List<String> categoryKeywords = expandCategoryKeywords(targetCategory);
         List<Restaurant> sameCategory = withCoords.stream()
@@ -72,39 +68,27 @@ public class AnalysisService {
                 .filter(r -> radiusKeys.contains(keyOf(r)))
                 .collect(Collectors.toList());
 
-        try {
-            //  위치 점수 계산 (최종 = 반경 안 + 동종업계 교집합 기준)
-            LocationScoreFactors locationFactors =
-                    calculateLocationScore(request, latitude, longitude, competitorsInRadius);
 
-            // 점수 배열 구성 (접근성을 제외한 나머지는 임시)
-            List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
-            scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason()));
-            scores.add(calculateBudgetSuitabilityScore(request));
-            scores.add(calculateMenuSuitabilityScore(request));
+        //  위치 점수 계산 (최종 = 반경 안 + 동종업계 교집합 기준)
+        LocationScoreFactors locationFactors =
+                calculateLocationScore(request, latitude, longitude, competitorsInRadius);
 
-            // 리뷰 로딩(반경 내 식당 기준_추후 반경 내 + 동종업계로 개선하여 더 관련있는 리뷰만 나오게 수정할 예정입니다)
-            List<Review> nearbyReviews = new ArrayList<>();
-            if (!withinRadius.isEmpty()) {
-                List<Long> ids = withinRadius.stream()
-                        .map(Restaurant::getKakaoPlaceId)
-                        .filter(Objects::nonNull)
-                        .collect(Collectors.toList());
-                if (!ids.isEmpty()) {
-                    nearbyReviews = reviewRepository.findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(ids);
-                }
-            }
+        // 점수 배열 구성
+        List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
+        scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason()));
+        scores.add(calculateBudgetSuitabilityScore(request));
+        scores.add(calculateMenuSuitabilityScore(request));
 
-            // 프롬프트 생성
-            String finalPrompt = createSimpleFinalReportPrompt(request, scores, nearbyReviews);
-            String aiFinalResponseJson = aiChatService.getAnalysisResponseFromAI(finalPrompt);
-            String cleanJson = aiFinalResponseJson.replace("```json", "").replace("```", "").trim();
-            return objectMapper.readValue(cleanJson, AnalysisResponse.class);
+        // ★ 동종업계 리뷰 분석 생성(반경 무관, 같은 카테고리 전체)
+        AnalysisResponse.ReviewAnalysis reviewAnalysis =
+                buildReviewAnalysisSameCategory(targetCategory);
 
-        } catch (IOException e) {
-            e.printStackTrace();
-            return new AnalysisResponse(List.of(), null, List.of(), null);
-        }
+        // scores: 3가지 항목 점수 관련, reviewAnalysis: 리뷰 관련, detailAnalysis: 상세 분석 관련
+        return new AnalysisResponse(
+                scores,
+                reviewAnalysis,
+                null            // detailAnalysis는 추후 확장
+        );
     }
 
     // "위치/접근성" 계산 로직
@@ -485,6 +469,184 @@ public class AnalysisService {
         return "부족(" + pct0(gap * 100) + " 부족)";
     }
 
+    private static double ratingAsDouble(Review r) {
+        BigDecimal bd = r.getRating();
+        return (bd == null) ? 0.0 : bd.doubleValue();
+    }
+
+    // 리뷰 분석
+    private AnalysisResponse.ReviewAnalysis buildReviewAnalysisSameCategory(String targetCategory) {
+        // 동종업계 가게 전부 수집
+        List<String> keywords = expandCategoryKeywords(Optional.ofNullable(targetCategory).orElse("").trim());
+        List<Restaurant> sameCategoryAll = restaurantRepository.findAll().stream()
+                .filter(r -> {
+                    String c = Optional.ofNullable(r.getCategory()).orElse("").toLowerCase();
+                    return keywords.stream().anyMatch(c::contains);
+                })
+                .toList();
+
+        if (sameCategoryAll.isEmpty()) {
+            return new AnalysisResponse.ReviewAnalysis(
+                    null,
+                    List.of(),
+                    "해당 카테고리의 가게가 없어 리뷰 기반 피드백을 제공하기 어렵습니다."
+            );
+        }
+
+        // 동종업계 집합 만들고, placeId로 1차 리뷰 조회
+        Set<String> nameSet = sameCategoryAll.stream()
+                .map(Restaurant::getRestaurantName)
+                .filter(Objects::nonNull)
+                .map(this::normalizeName)
+                .collect(Collectors.toSet());
+
+        List<Long> ids = sameCategoryAll.stream()
+                .map(Restaurant::getKakaoPlaceId)
+                .filter(Objects::nonNull)
+                .toList();
+
+        List<Review> reviews = ids.isEmpty()
+                ? List.of()
+                : reviewRepository.findAllByRestaurantKakaoPlaceIdInOrderByIdDesc(ids);
+
+        // placeId가 비어있는 데이터가 있다면, 이름 일치로 한 번 더 거르기(안전빵)
+        List<Review> sameNameReviews = reviews.stream()
+                .filter(r -> {
+                    String nm = Optional.ofNullable(r.getRestaurant())
+                            .map(Restaurant::getRestaurantName).orElse(null);
+                    return nm != null && nameSet.contains(normalizeName(nm));
+                })
+                .toList();
+
+        List<Review> base = sameNameReviews.isEmpty() ? reviews : sameNameReviews;
+        if (base.isEmpty()) {
+            return new AnalysisResponse.ReviewAnalysis(
+                    null,
+                    List.of(),
+                    "해당 카테고리의 리뷰 데이터가 없어 리뷰 기반 피드백을 제공하기 어렵습니다."
+            );
+        }
+
+        // 카테고리 전체 평균 평점
+        double avg = base.stream().map(Review::getRating).filter(Objects::nonNull).mapToDouble(java.math.BigDecimal::doubleValue).average().orElse(Double.NaN);
+        Double averageRating = Double.isNaN(avg) ? null : Math.round(avg * 10.0) / 10.0;
+
+        // GPT한테 도움 되는 리뷰 4개, 피드백만 json으로 받아오기(피드백 내용 만들때는 모든 리뷰 다 씀)
+        // 모든 리뷰를 넘기되, 한 줄로 정제하고 220자 넘는건 컷
+        String lines = base.stream()
+                .map(r -> {
+                    String store = Optional.ofNullable(r.getRestaurant())
+                            .map(Restaurant::getRestaurantName).orElse("(이름없음)");
+                    double score = ratingOf(r); // BigDecimal -> double
+                    String content = safeLine(Optional.ofNullable(r.getContent()).orElse(""));
+                    if (content.length() > 220) content = content.substring(0, 220) + "…";
+                    return String.format("- [%s | %.1f] %s", store, score, content);
+                })
+                .collect(Collectors.joining("\n"));
+
+        String prompt = """
+                # Role: Review analysis coach
+                # Task:
+                - You are analyzing reviews for the "%s" category in a **university-area** business context.
+                - From ALL reviews below, pick about **4** samples that would most help a prospective owner.
+                - Then provide **concise, practical feedback** (in Korean) for running a successful business in this category and area.
+                
+                # Output rules (MUST):
+                - **Write ALL output in Korean.**
+                - Return **pure JSON only** (no code block, no extra text).
+                - For each item in "reviewSamples":
+                  - Keep "storeName" as-is (가게명).
+                  - "reviewScore" must be a number (0.0~5.0).
+                  - "highlights" must be **an array with exactly ONE sentence** (1줄 요약, 구어체로).
+                    - Remove emojis/repeat chars like ㅋㅋ/ㅎㅎ/ㅠㅠ, URLs, hashtags, @mentions.
+                    - Normalize spacing/punctuation.
+                    - Keep it within **80 characters** and end with a period.
+                - In "feedback":
+                  - **Do not mention any store names**.
+                  - give university-area–aware advice (예: 학생 피크타임 운영, 가성비/포션, 회전율, 소음/분위기, 연령대·모임 수요 등).
+                  - 내가 준 모든 리뷰 내용을 고려하여 관련된 조언을 해주고(특히 reviewSamples에 나온 내용 관련해선 꼭 언급해줘)
+                  - 한국인들의 친근감이 들 수 있게 친절한 상담사처럼 "~요"체로 말해줘.
+                  - 너무 내용이 적은 것 같으면 좀 더 너가 서칭해보고 관련 업계 팁을 4줄정도는 양을 채워줘.
+                
+                # JSON schema:
+                {
+                  "reviewSamples": [
+                    {"storeName": "가게명", "reviewScore": 4.5, "highlights": ["한 줄 요약."]}
+                  ],
+                  "feedback": "종합 피드백 (한국어)"
+                }
+                
+                # Reviews
+                %s
+                """.formatted(targetCategory, lines);
+
+        List<AnalysisResponse.ReviewSample> samples;
+        String feedback;
+        try {
+            String raw = aiChatService.getAnalysisResponseFromAI(prompt)
+                    .replace("```", "").trim();
+
+            // GPT 응답 파싱용 임시 레코드
+            record Out(List<Map<String, Object>> reviewSamples, String feedback) {}
+            Out out = objectMapper.readValue(raw, Out.class);
+
+            // 안전 매핑: storeName, reviewScore, highlights
+            samples = Optional.ofNullable(out.reviewSamples())
+                    .orElse(List.of())
+                    .stream()
+                    .limit(4)
+                    .map(m -> {
+                        String store = String.valueOf(m.getOrDefault("storeName", "(이름없음)"));
+                        double score2;
+                        try { score2 = Double.parseDouble(String.valueOf(m.getOrDefault("reviewScore", 0.0))); }
+                        catch (Exception e) { score2 = 0.0; }
+                        @SuppressWarnings("unchecked")
+                        List<String> hl = (List<String>) m.getOrDefault("highlights", List.of());
+                        if (hl == null) hl = List.of();
+                        return new AnalysisResponse.ReviewSample(store, score2, hl);
+                    })
+                    .toList();
+
+            feedback = Optional.ofNullable(out.feedback()).orElse("리뷰를 바탕으로 운영 팁을 요약했습니다.");
+        }
+        catch (Exception e) {
+            // 파싱 실패 시: 단순 샘플 4개 + 기본 피드백
+            samples = base.stream().limit(4)
+                    .map(r -> new AnalysisResponse.ReviewSample(
+                            Optional.ofNullable(r.getRestaurant()).map(Restaurant::getRestaurantName).orElse("(이름없음)"),
+                            ratingOf(r),
+                            List.of(snippet(r.getContent(), 80))
+                    ))
+                    .toList();
+            feedback = "리뷰 내용을 참고해 메뉴 품질 일관성, 피크타임 대기 관리, 직원 응대 매뉴얼(인사/설명/불만 응대), 위생·청결체크리스트를 체계화하세요. 상권 피드백이 반복되는 항목은 우선순위로 개선하세요.";
+        }
+        return new AnalysisResponse.ReviewAnalysis(
+                averageRating,
+                samples,
+                feedback
+        );
+    }
+
+    // 리뷰 로직 헬퍼
+    private double ratingOf(Review r) {
+        java.math.BigDecimal b = r.getRating();
+        return (b == null) ? 0.0 : b.doubleValue();
+    }
+    private String normalizeName(String s) {
+        return Optional.ofNullable(s).orElse("").replaceAll("\\s+", "").toLowerCase();
+    }
+    // 리뷰 내용 짧게 자르는 유틸
+    private String snippet(String s, int max) {
+        if (s == null) return "";
+        String oneLine = s.replaceAll("\\s+", " ").trim();
+        return oneLine.length() <= max ? oneLine : oneLine.substring(0, max) + "…";
+    }
+    // 프롬프트/로그 안전용: 개행/탭 제거,트림
+    private String safeLine(String s) {
+        if (s == null) return "";
+        return s.replace("\n", " ").replace("\r", " ").replace("\t", " ").trim();
+    }
+
 
     // 최종 프롬프트
     private String createSimpleFinalReportPrompt(AnalysisRequest request, List<AnalysisResponse.ScoreInfo> scores, List<Review> reviews) {
@@ -522,16 +684,11 @@ public class AnalysisService {
                 {"name": "메뉴 적합성", "score": %d, "expectedPrice": null, "reason": "%s"}
               ],
               "reviewAnalysis": {
-                "summary": "주변 리뷰 종합 분석...",
-                "positiveKeywords": ["키워드1", "키워드2"],
-                "negativeKeywords": ["키워드3", "키워드4"],
-                "reviewSamples": []
-              },
-              "tips": [
-                {"type": "success", "message": "성공 요인 조언..."},
-                {"type": "warning", "message": "주의사항 조언..."},
-                {"type": "info", "message": "참고사항 조언..."}
-              ]
+                "averageRating": null,
+                "reviewSamples": [],
+                "feedback": "유사업종 리뷰를 바탕으로 종합한 요약/피드백을 간결하게 작성"
+              }
+       
             }
             """,
                 request.addr(), request.category(),
@@ -636,5 +793,4 @@ public class AnalysisService {
     }
 
     private String safeName(Restaurant r) { return Optional.ofNullable(r.getRestaurantName()).orElse("(이름없음)"); }
-    private String safeCat(Restaurant r) { return Optional.ofNullable(r.getCategory()).orElse("(카테고리없음)"); }
 }
