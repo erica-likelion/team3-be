@@ -561,10 +561,11 @@ public class AnalysisService {
                     - Keep it within **80 characters** and end with a period.
                 - In "feedback":
                   - **Do not mention any store names**.
-                  - give university-area–aware advice (예: 학생 피크타임 운영, 가성비/포션, 회전율, 소음/분위기, 연령대·모임 수요 등).
-                  - 내가 준 모든 리뷰 내용을 고려하여 관련된 조언을 해주고(특히 reviewSamples에 나온 내용 관련해선 꼭 언급해줘)
+                  - Provide **university-area–aware advice** (예: 학생 피크타임 운영, 가성비/포션, 회전율, 소음/분위기, 연령대·모임 수요 등).
+                  - 내가 준 모든 리뷰 내용을 고려하여 관련된 조언을 해주고(특히 reviewSamples에 나온 내용 관련해선 꼭 언급해줘).
                   - 한국인들의 친근감이 들 수 있게 친절한 상담사처럼 "~요"체로 말해줘.
-                  - 너무 내용이 적은 것 같으면 좀 더 너가 서칭해보고 관련 업계 팁을 4줄정도는 양을 채워줘.
+                  - 내용이 너무 적으면 너가 서칭해서라도 관련 업계 팁을 최소 4줄 정도 채워줘.
+                  - ****반드시 방학(비성수기) / 학기중(성수기) / 시험기간(성수기)의 유동인구 차이를 언급하고, 각 시기별 운영 전략과 팁을 위의 내용들에 추가해줘.(위의 내용들도 언급하고 이것은 추가 언급****
                 
                 # JSON schema:
                 {
