@@ -85,6 +85,8 @@ springdoc:
     enabled: ${SWAGGER_ENABLED:true}
     path: /v3/api-docs
   swagger-ui:
+    urls[0].name: Production
+    urls[0].url: http://3.34.244.253/v3/api-docs
     enabled: ${SWAGGER_ENABLED:true}
     path: /swagger
     operationsSorter: method
