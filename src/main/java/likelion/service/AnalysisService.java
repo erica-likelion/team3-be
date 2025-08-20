@@ -275,11 +275,11 @@ public class AnalysisService {
         int bonus = 0;
         if (FAST_FRIENDLY.contains(menu)) {
             bonus += 5;
-            bonusNotes.add("공강 시간에 빠르게 먹기 좋은 메뉴입니다.(+5)");
+            bonusNotes.add("공강시간에 빠르게 먹기 좋은 메뉴라는 점에서 (+5)");
         }
         if (PREFERRED.contains(menu)) {
             bonus += 5;
-            bonusNotes.add("해당 대표 메뉴는 학생 설문 선호 메뉴(초밥/국밥)이기에 이점이 있습니다.(+5)");
+            bonusNotes.add("해당 대표 메뉴는 학생 설문 선호 메뉴(초밥/국밥)이기에 (+5)");
         }
         score += bonus;
 
@@ -296,12 +296,37 @@ public class AnalysisService {
                 (diffRatio >= 0 ? "+" : "-"),
                 pct,
                 (diffRatio >= 0 ? "높은" : "낮은"));
-        String extraSentence = bonusNotes.isEmpty() ? "" : " " + String.join(" / ", bonusNotes);
+//        String extraSentence = bonusNotes.isEmpty() ? "" : " " + String.join(" / ", bonusNotes);
+//
+//        String summary = String.format(
+//                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s%s",
+//                avg, priceSentence, extraSentence
+//        );
+
+        int pricePenalty = Math.min(0, adjustByPrice); //가격 때문에 깎인 점수
+        int priceBonus   = Math.max(0, adjustByPrice); //가격 때문에 오른 점수
+
+        //가점 텍스트는 기존 bonusNotes 그대로 사용 + 가격 가점이 있으면 항목 추가
+        List<String> bonusList = new ArrayList<>(bonusNotes);
+            if (priceBonus > 0) {
+                bonusList.add(String.format("가격 요인 +%d점", priceBonus));
+            }
+        String bonusStr   = bonusList.isEmpty() ? "없음" : String.join(" / ", bonusList);
+        String penaltyStr = (pricePenalty < 0) ? String.format("가격 요인 %d점", pricePenalty) : "없음";
+
+        // 합계 계산 (기존 bonus 변수를 그대로 사용)
+        int bonusSum   = priceBonus + bonus;
+        int penaltySum = pricePenalty;
 
         String summary = String.format(
-                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s%s",
-                avg, priceSentence, extraSentence
+                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s 감점: %s(합계 %s점)입니다. " +
+                        "가점: %s(합계 +%d점)입니다.",
+                avg,
+                priceSentence,
+                penaltyStr, String.format("%+d", penaltySum),
+                bonusStr, bonusSum
         );
+
 
         // 점수 산식은 뒤에
         String breakdown = String.format(
