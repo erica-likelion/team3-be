@@ -79,3 +79,15 @@ management:
     health:
       probes:
         enabled: true
+
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+    path: /swagger
+    operationsSorter: method
+    tagsSorter: alpha
+  packages-to-scan: likelion.controller
+  paths-to-match: /api/**
