@@ -29,7 +29,7 @@ public class AnalysisService {
     // 위치 점수 계산 결과
     private record LocationScoreFactors(int score, double distanceToMainGate,
             int floor, long competitorCount, List<String> competitorNames, // "가게명(거리m)" 형태
-            String reason
+            String reason, List<AnalysisResponse.AdjusmentItem> penalties, List<AnalysisResponse.AdjusmentItem> bonuses
     ) {}
 
 
@@ -77,7 +77,7 @@ public class AnalysisService {
 
         // 점수 배열 구성
         List<AnalysisResponse.ScoreInfo> scores = new ArrayList<>();
-        scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason()));
+        scores.add(new AnalysisResponse.ScoreInfo("접근성", locationFactors.score(), null, locationFactors.reason(),locationFactors.penalties(),locationFactors.bonuses()));
         scores.add(calculateBudgetSuitabilityScore(request));
         scores.add(calculateMenuSuitabilityScore(request));
 
@@ -93,36 +93,52 @@ public class AnalysisService {
 
     // ============================= "위치/접근성" 계산 로직 ===========================
     private LocationScoreFactors calculateLocationScore(AnalysisRequest request, double latitude, double longitude, List<Restaurant> competitorsInRadius) {
-        int base = 90;
+        int base = 100;
         int score = base;
 
         // 정문 좌표
         final double ERICA_MAIN_GATE_LAT = 37.300097500612374;
         final double ERICA_MAIN_GATE_LON = 126.83779165311796;
 
-        // 정문부터 30m까진 감점 없고 초과부터는 10m당 3점 감점
         double distance = DistanceCalc.calculateDistance(latitude, longitude, ERICA_MAIN_GATE_LAT, ERICA_MAIN_GATE_LON);
-        int distancePenalty = (distance > 30)
-                ? (int) Math.ceil((distance - 30) / 10.0) * 3 : 0;
-        score -= distancePenalty;
 
-        // 1층은 감점 없고 2층부터 7점씩 감점, 지하는 층당 10점 감점
+        // 거리 가감점: ≤30m +3, 30~50m 0, >50m 10m당 -3
+        int distanceBonus = 0;
+        int distancePenalty = 0;
+        if (distance <= 30) {
+            distanceBonus = 3;
+        } else if (distance > 50) {
+            distancePenalty = (int) Math.ceil((distance - 50) / 10.0) * 3;
+        }
+
+        // 층수: 1층 +5, 2층부터 -7/층, 지하는 층당 -10
         int floor = request.height() != null ? request.height() : 1;
+        int floorBonus = (floor == 1 ? 5 : 0);
         int floorPenalty;
         if (floor < 0) floorPenalty = Math.abs(floor) * 10;
         else if (floor >= 2) floorPenalty = (floor - 1) * 7;
         else floorPenalty = 0;
-        score -= floorPenalty;
 
+        // 경쟁사 가감점: 0개 +5, 1개 0, 2개부터 개당 -3
         long competitorCount = competitorsInRadius.size();
+        int competitorBonus = 0;
+        int competitorPenalty = 0;
+        if (competitorCount == 0) {
+            competitorBonus = 5;
+        } else if (competitorCount >= 2) {
+            competitorPenalty = (int) (competitorCount * 3); // 2개→-6, 3개→-9 ...
+        }
 
-        // 경쟁사 하나당 3점 감점
-        int competitorPenalty = competitorCount > 1 ? (int) ((competitorCount) * 3) : 0;
+        // 점수 합산
+        score += distanceBonus;
+        score -= distancePenalty;
+        score += floorBonus;
+        score -= floorPenalty;
+        score += competitorBonus;
         score -= competitorPenalty;
-
         score = Math.max(0, Math.min(100, score));
 
-        // 이름+거리로 정렬하여 5개만 표기(결과에 5개 넘어가는 것은 그 외 n개라고 나오게함)
+        // 이름+거리로 정렬하여 5개만 표기(결과에 5개 넘어가는 것은 그 외 n개)
         DecimalFormat df = new DecimalFormat("#0");
         List<String> competitorNamesWithDist = competitorsInRadius.stream()
                 .map(r -> {
@@ -134,25 +150,23 @@ public class AnalysisService {
                 .map(e -> String.format("%s(%sm)", safeName(e.getKey()), df.format(e.getValue())))
                 .collect(Collectors.toList());
 
-        // 위치/접근성 점수 summary
         String summary = generateLocationReason(distance, floor, competitorCount, competitorNamesWithDist);
 
-        // 점수 산식
-        String breakdown = String.format(
-                "기본점수: %d%n" +
-                        "거리 감점: %s (거리 %.0fm, 30m 초과 10m당 −3)%n" +
-                        "층수 감점: %s (층수 %d)%n" +
-                        "경쟁사 감점: %s (동종업계 %d곳)%n" +
-                        "최종점수: %d",
-                base,
-                sign(-distancePenalty), distance,
-                sign(-floorPenalty), floor,
-                sign(-competitorPenalty), competitorCount,
-                score
-        );
+        // 감점/가점 항목 구성
+        List<AnalysisResponse.AdjusmentItem> penaltyItems = new ArrayList<>();
+        if (distancePenalty > 0)   penaltyItems.add(new AnalysisResponse.AdjusmentItem("정문과 거리", -distancePenalty));
+        if (floorPenalty > 0)      penaltyItems.add(new AnalysisResponse.AdjusmentItem("층수 불리",   -floorPenalty));
+        if (competitorPenalty > 0) penaltyItems.add(new AnalysisResponse.AdjusmentItem("주변 경쟁사 밀도", -competitorPenalty));
 
-        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
-        return new LocationScoreFactors(score, distance, floor, competitorCount, competitorNamesWithDist, reason);
+        List<AnalysisResponse.AdjusmentItem> bonusItems = new ArrayList<>();
+        if (distanceBonus > 0)     bonusItems.add(new AnalysisResponse.AdjusmentItem("정문과 근접", +distanceBonus));
+        if (floorBonus > 0)        bonusItems.add(new AnalysisResponse.AdjusmentItem("1층 입지", +floorBonus));
+        if (competitorBonus > 0)   bonusItems.add(new AnalysisResponse.AdjusmentItem("동종 경쟁사 없음", +competitorBonus));
+
+        String reason = summary;
+
+        return new LocationScoreFactors(score, distance, floor, competitorCount, competitorNamesWithDist,
+                reason, penaltyItems, bonusItems);
     }
 
     // 부호 붙여주는 헬퍼
@@ -163,39 +177,78 @@ public class AnalysisService {
     // ======================== 사용자 설명에 보낼 멘트(위치 점수 관련) ========================
     private String generateLocationReason(double distance, int floor, long competitorCount, List<String> competitorNamesWithDist) {
         StringBuilder sb = new StringBuilder();
-        if (distance <= 30) sb.append(String.format("정문과 매우 가까워(약 %.0fm) 접근성이 우수합니다. ", distance));
-        else if (distance <= 70) sb.append(String.format("정문에서 도보 접근이 무난한 거리(약 %.0fm)입니다. ", distance));
-        else sb.append(String.format("정문과 거리가 다소 있어(약 %.0fm) 유동인구 유입이 제한적일 수 있습니다. ", distance));
 
-        if (floor < 0) sb.append(String.format("지하 %d층으로 간판 노출과 접근성이 제한적입니다. ", Math.abs(floor)));
-        else if (floor == 1) sb.append("1층이라 고객 노출에 가장 유리합니다. ");
-        else if (floor == 2) sb.append("2층이라 1층 대비 고객 유입에 다소 불리할 수 있습니다. ");
-        else sb.append(String.format("%d층이라 노출이 적어 고객 유입에 불리할 수 있습니다. ", floor));
+        // 거리 (≤30m 가점, 30~50m 중립, 50m 넘으면 10m당 감점)
+        if (distance <= 30) {
+            sb.append(String.format("정문과 매우 가까워(약 %.0fm) 접근성이 우수합니다. ", distance));
+        } else if (distance <= 50) {
+            sb.append(String.format("정문과 가까운 편(약 %.0fm)으로 접근성이 양호합니다. ", distance));
+        } else if (distance <= 70) {
+            sb.append(String.format("정문과 다소 떨어져 있어(약 %.0fm) 접근성이 떨어질 수 있습니다. ", distance));
+        } else {
+            sb.append(String.format("정문과 거리가 있어(약 %.0fm) 접근성이 제한적일 수 있습니다. ", distance));
+        }
 
+        // 층수 (1층 가점, 2층부터 감점, 지하는 더 감점)
+        if (floor < 0) {
+            sb.append(String.format("지하 %d층으로 간판 노출과 접근성이 제한적입니다. ", Math.abs(floor)));
+        } else if (floor == 1) {
+            sb.append("1층이라 고객 노출과 유입에 유리합니다. ");
+        } else if (floor == 2) {
+            sb.append("2층이라 1층 대비 고객 유입에 다소 불리할 수 있습니다. ");
+        } else {
+            sb.append(String.format("%d층이라 노출이 적어 고객 유입에 불리할 수 있습니다. ", floor));
+        }
+
+        // 경쟁사 (0개 가점, 2개부턴 감점)
         if (competitorCount == 0) {
-            sb.append("주변에 동종 업종 경쟁이 거의 없는 점은 큰 장점입니다.");
+            sb.append("주변에 동종 경쟁이 없어 초기 고객 유입에 유리합니다.");
         } else if (competitorCount == 1) {
-            sb.append(String.format("주변 경쟁사: %s 1곳의 적당한 경쟁이 있을 예정이지만 무난한 조건입니다.", competitorNamesWithDist.get(0)));
+            sb.append(String.format("주변 경쟁사: %s 1곳이 있습니다.", competitorNamesWithDist.get(0)));
         } else {
             String list = String.join(", ", competitorNamesWithDist);
             long remain = competitorCount - competitorNamesWithDist.size();
-            if (remain > 0) sb.append(String.format("주변 경쟁사 %d곳: %s 외 %d곳이 있습니다. 따라서 경쟁 업체가 많으므로 좋지 않은 입지 조건입니다.", competitorCount, list, remain));
-            else sb.append(String.format("주변 경쟁사 %d곳: %s가(이) 있습니다. 따라서 경쟁 업체가 많으므로 좋지 않은 입지 조건입니다.", competitorCount, list));
+            if (remain > 0) {
+                sb.append(String.format("주변 경쟁사 %d곳: %s 외 %d곳이 있습니다.", competitorCount, list, remain));
+            } else {
+                sb.append(String.format("주변 경쟁사 %d곳: %s가(이) 있습니다.", competitorCount, list));
+            }
         }
+
         return sb.toString().trim();
     }
 
     // 메뉴 적합성을 위한 상수 세팅
-    private static final int MENU_BASE_SCORE = 90;   // 기본 점수
-    private static final int MENU_MAX = 95;
+    private static final int MENU_BASE_SCORE = 100;   // 기본 점수
+    private static final int MENU_MAX = 100;
     private static final int MENU_MIN = 10;
 
-    // 학생 친화(공강 시간에 빠르게 먹기 좋은 메뉴) 보너스 + 설문 조사 기반 선호 메뉴(초밥, 국밥) 보너스
+    // 학생 친화(공강 시간에 빠르게 먹기 좋은 메뉴)
     private static final Set<String> FAST_FRIENDLY = Set.of(
             "덮밥/비빔밥","면/국수","라멘/우동/소바","짜장면","짬뽕","덮밥/도시락",
             "샌드위치/샐러드","조각 케이크","아메리카노"
     );
+
+    // 설문 조사 기반 선호 메뉴(초밥, 국밥) 보너스
     private static final Set<String> PREFERRED = Set.of("초밥","국밥");
+
+    // 포장/배달 친화
+    private static final Set<String> PACK_DELIVERY_FRIENDLY = Set.of(
+            "피자","치킨","햄버거","핫도그","샌드위치","도시락","주먹밥",
+            "분식","김밥","떡볶이",
+            "도넛","조각 케이크","아메리카노","아이스크림","빙수",
+            "초밥","돈카츠","덮밥","덮밥/도시락","덮밥/비빔밥"
+    );
+
+    // SNS 트렌디(최근 대학가에서 유행 빈도 높은 메뉴.. 제 기준)
+    private static final Set<String> TRENDY_MENU = Set.of(
+            "마라","마라탕","훠궈"
+    );
+
+    // 고급/고가 메뉴(대학가 메인 타깃과는 가격대/캐주얼성에서 거리가 있음)
+    private static final Set<String> HIGH_END_MENU = Set.of(
+            "스테이크","스테이크,립","립","퓨전일식","브라질"
+    );
 
     // AI로 '대표메뉴'의 대학가 평균가 가격 받아오는 메서드
     private Integer fetchMenuAvgPriceFromAI(String representativeMenuName) throws JsonProcessingException {
@@ -245,50 +298,66 @@ public class AnalysisService {
     // ================================= "메뉴 적합성 점수 로직" ======================================
     private AnalysisResponse.ScoreInfo calculateMenuSuitabilityScore(AnalysisRequest request) {
         String menu = request.representativeMenuName();
-        Integer userPrice = request.representativeMenuPrice(); // 단위: 원 (프론트 입력 기준)
+        Integer userPrice = request.representativeMenuPrice();
 
-        // 기본 방어(실패 시)
+        // 기본 실패 시
         if (menu == null || menu.isBlank() || userPrice == null || userPrice <= 0) {
             return new AnalysisResponse.ScoreInfo(
-                    "메뉴 적합성", 70, null,
-                    "— 점수 산식 —\n기본점수: 70\n사유: 대표메뉴/가격 정보 부족 → 보수적 점수 부여"
-            );
+                    "메뉴 적합성", 70, null, "— 점수 산식 —\n기본점수: 70\n사유: 대표메뉴/가격 정보 부족 → 보수적 점수 부여",
+                    List.of(), List.of()); // 뒤에 두개는 보너스랑 페널티
         }
 
+        // 평균가 추정 ai 실패 시
         Integer avg = null;
         try { avg = fetchMenuAvgPriceFromAI(menu); } catch (Exception ignore) {}
-        if (avg == null) avg = fallbackAvgPrice(menu); // 실패 시 백업
+        if (avg == null) avg = fallbackAvgPrice(menu);
         if (avg == null) {
-            return new AnalysisResponse.ScoreInfo(
-                    "메뉴 적합성", 70, null, "평균가 추정이 어려워 보수적 점수를 부여했습니다."
-            );
+            return new AnalysisResponse.ScoreInfo("메뉴 적합성", 70, null,
+                    "평균가 추정이 어려워 보수적 점수를 부여했습니다.", List.of(), List.of());
         }
 
-        // 90점을 기준으로, 평균가 대비 ±10% 당 ±5점
-        // diffRatio > 0 이면 우리 가격이 평균보다 비쌈 → 감점
+        // 평균가 대비 ±10% 당 ±5점 (평균보다 비싸면 감점)
         double diffRatio = (userPrice - avg) / (double) avg;
         int adjustByPrice = (int) Math.round((diffRatio / 0.10) * -5);
         int score = MENU_BASE_SCORE + adjustByPrice;
 
-        // 대학생 타겟/설문 선호 -> 가산점 부여
-        List<String> bonusNotes = new ArrayList<>();
-        int bonus = 0;
-        if (FAST_FRIENDLY.contains(menu)) {
-            bonus += 5;
-            bonusNotes.add("공강시간에 빠르게 먹기 좋은 메뉴라는 점에서 (+5)");
-        }
-        if (PREFERRED.contains(menu)) {
-            bonus += 5;
-            bonusNotes.add("해당 대표 메뉴는 학생 설문 선호 메뉴(초밥/국밥)이기에 (+5)");
-        }
-        score += bonus;
+        // 대학가 친화 가점(기존)
+        boolean isFastFriendly = containsAny(menu, FAST_FRIENDLY);
+        boolean isPreferred    = containsAny(menu, PREFERRED);
+        if (isFastFriendly) score += 5;
+        if (isPreferred)    score += 5;
+
+        // 포장/배달 친화 +5, 트렌디 +5, 고가 -5
+        boolean isPackable   = containsAny(menu, PACK_DELIVERY_FRIENDLY);
+        boolean isTrendy     = containsAny(menu, TRENDY_MENU);
+        boolean isHighEnd    = containsAny(menu, HIGH_END_MENU);
+
+        if (isPackable) score += 5;
+        if (isTrendy)   score += 5;
+        if (isHighEnd)  score -= 5;
 
         // 캡핑
         score = Math.max(MENU_MIN, Math.min(MENU_MAX, score));
 
-        // summary 먼저
+        // 가격 요인 분해
+        int pricePenalty = Math.min(0, adjustByPrice); // 평균보다 높아서 감점(음수)
+        int priceBonus   = Math.max(0, adjustByPrice); // 평균보다 낮아서 가점(양수)
+
+        // penalties / bonuses 리스트 구성
+        List<AnalysisResponse.AdjusmentItem> penalties = new ArrayList<>();
+        if (pricePenalty < 0) penalties.add(adj("가격(평균 대비 높음)", pricePenalty));
+        if (isHighEnd)        penalties.add(adj("고급/고가 메뉴 성격", -5));
+
+        List<AnalysisResponse.AdjusmentItem> bonuses = new ArrayList<>();
+        if (priceBonus > 0)    bonuses.add(adj("가격(평균 대비 낮음)", priceBonus));
+        if (isFastFriendly)    bonuses.add(adj("빠르게 먹기 좋은 메뉴", +5));
+        if (isPreferred)       bonuses.add(adj("학생 선호 메뉴", +5));
+        if (isPackable)        bonuses.add(adj("포장/배달 친화 메뉴", +5));
+        if (isTrendy)          bonuses.add(adj("트렌디 메뉴 특성", +5));
+
+        // ===== reason(줄글) — 점수 숫자 표기 제거, 자연어 설명만 =====
         double pct = Math.abs(diffRatio) * 100.0;
-        boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내면 동일 취급
+        boolean nearlyZero = Math.abs(diffRatio) < 0.005; // ±0.5% 이내
         String priceSentence = nearlyZero
                 ? String.format("입력 가격 %,d원은 평균과 거의 동일합니다.", userPrice)
                 : String.format("입력 가격 %,d원은 평균 대비 %s%.0f%% %s 편입니다.",
@@ -296,56 +365,40 @@ public class AnalysisService {
                 (diffRatio >= 0 ? "+" : "-"),
                 pct,
                 (diffRatio >= 0 ? "높은" : "낮은"));
-//        String extraSentence = bonusNotes.isEmpty() ? "" : " " + String.join(" / ", bonusNotes);
-//
-//        String summary = String.format(
-//                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s%s",
-//                avg, priceSentence, extraSentence
-//        );
 
-        int pricePenalty = Math.min(0, adjustByPrice); //가격 때문에 깎인 점수
-        int priceBonus   = Math.max(0, adjustByPrice); //가격 때문에 오른 점수
+        StringBuilder reasonSb = new StringBuilder();
+        reasonSb.append(String.format("해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s ", avg, priceSentence));
 
-        //가점 텍스트는 기존 bonusNotes 그대로 사용 + 가격 가점이 있으면 항목 추가
-        List<String> bonusList = new ArrayList<>(bonusNotes);
-            if (priceBonus > 0) {
-                bonusList.add(String.format("가격 요인 +%d점", priceBonus));
-            }
-        String bonusStr   = bonusList.isEmpty() ? "없음" : String.join(" / ", bonusList);
-        String penaltyStr = (pricePenalty < 0) ? String.format("가격 요인 %d점", pricePenalty) : "없음";
+        if (pricePenalty < 0) {
+            reasonSb.append("가격이 평균보다 높아 대학가 고객에게 다소 부담이 될 수 있습니다. ");
+        } else if (priceBonus > 0) {
+            reasonSb.append("가격이 평균보다 낮아 가성비 측면에서 경쟁력이 있습니다. ");
+        } else {
+            reasonSb.append("가격 포지셔닝은 무난한 편입니다. ");
+        }
 
-        // 합계 계산 (기존 bonus 변수를 그대로 사용)
-        int bonusSum   = priceBonus + bonus;
-        int penaltySum = pricePenalty;
+        if (isFastFriendly) reasonSb.append("공강 시간에 빠르게 식사가 가능해 회전율 관리에 유리합니다. ");
+        if (isPreferred)    reasonSb.append("학생 선호도가 높은 메뉴라 초기 수요 확보에 도움이 됩니다. ");
+        if (isPackable)     reasonSb.append("포장·배달에 적합해 비대면/야간 수요 대응에 유리합니다. ");
+        if (isTrendy)       reasonSb.append("SNS 트렌드에 부합해 초기 화제성 확보에 도움이 됩니다. ");
+        if (isHighEnd)      reasonSb.append("다만 고급·고가 성격이라 대학가 메인 타깃과의 가격 간극을 유의해야 합니다. ");
 
-        String summary = String.format(
-                "해당 대표메뉴 평균가는 약 %,d원으로 추정됩니다. %s 감점: %s(합계 %s점)입니다. " +
-                        "가점: %s(합계 +%d점)입니다.",
-                avg,
-                priceSentence,
-                penaltyStr, String.format("%+d", penaltySum),
-                bonusStr, bonusSum
+        String reason = reasonSb.toString().trim();
+
+        return new AnalysisResponse.ScoreInfo(
+                "메뉴 적합성", score, null, reason, penalties, bonuses
         );
-
-
-        // 점수 산식은 뒤에
-        String breakdown = String.format(
-                "기본점수: %d%n" +
-                        "가격 가감: %+d (평균가 %,d원 대비 %s%.0f%%)%n" +
-                        "보너스 합계: %+d (%s)%n" +
-                        "최종점수: %d",
-                MENU_BASE_SCORE,
-                adjustByPrice, avg, (diffRatio >= 0 ? "+" : "-"), pct,
-                bonus, (bonusNotes.isEmpty() ? "-" : String.join(", ", bonusNotes)),
-                score
-        );
-
-        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
-
-        return new AnalysisResponse.ScoreInfo("메뉴 적합성", score, null, reason);
     }
 
-    private static String signed(int v) { return (v >= 0 ? "+" : "") + v; }
+    //menu 문자열에 세트의 키워드 중 하나라도 포함되는지 체크(공백 제거·소문자 비교)
+    private boolean containsAny(String menu, Set<String> keywords) {
+        String t = Optional.ofNullable(menu).orElse("").replaceAll("\\s+","").toLowerCase();
+        for (String k : keywords) {
+            String key = k.replaceAll("\\s+","").toLowerCase();
+            if (t.contains(key)) return true;
+        }
+        return false;
+    }
 
     // 예산 적합성 층별 1평당 (보증금, 월세) 상수, 가격 단위는 "원/평"입니다
     public record FloorPrice(int depositPerPy, int monthlyPerPy) {}
@@ -394,9 +447,7 @@ public class AnalysisService {
         // 방어: 필수 입력
         if (request.size() == null || request.budget() == null) {
             return new AnalysisResponse.ScoreInfo(
-                    "예산 적합성", 70, null,
-                    "면적 또는 월세 예산 정보가 부족해 보수적으로 평가했습니다."
-            );
+                    "예산 적합성", 70, null, "면적 또는 월세 예산 정보가 부족해 보수적으로 평가했습니다.", List.of(), List.of());
         }
 
         // 입력 파라미터
@@ -409,7 +460,7 @@ public class AnalysisService {
 
         // 층 키 및 1평 단가
         String floorKey = floorKeyFrom(request.height());
-        FloorPrice fp = PY_PRICE_BY_FLOOR.getOrDefault(floorKey, PY_PRICE_BY_FLOOR.get("1F"));
+        FloorPrice fp = PY_PRICE_BY_FLOOR.getOrDefault(floorKey, PY_PRICE_BY_FLOOR.get("1F")); // 만약 층 안 들어오면 1층으로.. 근데 어차피 무조건 들어올듯
 
         // 예상 총 월세/보증금 (원) : (단가 원/평) × (평수)
         long expRentMin  = (long) fp.monthlyPerPy() * sizeMin;
@@ -420,49 +471,52 @@ public class AnalysisService {
         long expDepoMax  = (long) fp.depositPerPy() * sizeMax;
         long expDepoMid  = Math.round((expDepoMin + expDepoMax) / 2.0);
 
-        // 사용자 예산(만원) → 원
+        // 사용자 예산(만원) -> 원
         long userRentMax = manToWon(rentMaxMan);
         long userDepoMax = manToWon(depoMaxMan);
-
-        // 점수 규칙 (월세/보증금 각각 채점, 가중합)
-        int base = 90, minScore = 10, maxScore = 100;
 
         int rentDelta = scoreDeltaAgainstRange(userRentMax, expRentMin, expRentMid, expRentMax);
         int depoDelta = scoreDeltaAgainstRange(userDepoMax, expDepoMin, expDepoMid, expDepoMax);
 
-        // 가중합: 월세 70%, 보증금 30%
-        int score = base + (int) Math.round(rentDelta * 0.7 + depoDelta * 0.3);
+        // 월세 70 전세 30의 가중치 적용(월세가 좀 더 중요하다고 생각)
+        double RENT_W = 0.7;
+        double DEPO_W = 0.3;
+
+        int rentWeighted = (int) Math.round(rentDelta * RENT_W);
+        int depoWeighted = (int) Math.round(depoDelta * DEPO_W);
+
+        int base = 100, minScore = 10, maxScore = 100;
+        int score = base + rentWeighted + depoWeighted;
         score = Math.max(minScore, Math.min(maxScore, score));
 
-        // 이유(멘트 정해놓고 값 넣어서 주기)
+        // ===== 줄글 reason (산식/숫자열 요약 X, 사람이 읽기 쉬운 설명만) =====
         String summary = String.format(
-                "해당 지역의 요청 층수 %s 기준 1평당 예상 단가는 보증금 %,d원/월세 %,d원입니다. " +
-                        "희망 면적 %d~%d평을 적용할 때 예상 총 월세는 %s - %s(중앙값 %s), 보증금은 %s~%s(중앙값 %s)로 추정됩니다. " +
-                        "입력 예산은 월세 최대 %s, 보증금 최대 %s이며, 이를 기준으로 월세 적합도 %s, 보증금 적합도 %s로 평가했습니다.",
-                floorKey, fp.depositPerPy(), fp.monthlyPerPy(),
-                sizeMin, sizeMax,
-                wonToManStr(expRentMin), wonToManStr(expRentMax), wonToManStr(expRentMid),
-                wonToManStr(expDepoMin), wonToManStr(expDepoMax), wonToManStr(expDepoMid),
-                String.format("%,d만원", rentMaxMan), String.format("%,d만원", depoMaxMan),
-                subScoreLabel(userRentMax, expRentMin, expRentMid, expRentMax),
-                subScoreLabel(userDepoMax, expDepoMin, expDepoMid, expDepoMax)
+                "요청 층수 %s 기준 1평당 예상 단가는 보증금 %s/월세 %s입니다. " +
+                "희망 면적 %d~%d평을 적용하면 예상 월세 중앙값은 %s, 보증금 중앙값은 %s 수준으로 추정됩니다. " +
+                "입력 예산(월세 최대 %s, 보증금 최대 %s)을 고려할 때 월세·보증금 모두에서 예산 여유/부족 정도가 반영되며, " +
+                "최종 점수는 월세 70%%, 보증금 30%%의 가중치로 계산되었습니다.",
+                floorKey, wonToManStr(fp.depositPerPy()), wonToManStr(fp.monthlyPerPy()),
+                sizeMin, sizeMax, wonToManStr(expRentMid), wonToManStr(expDepoMid),
+                String.format("%,d만원", rentMaxMan), String.format("%,d만원", depoMaxMan)
         );
 
-        // 예산 적합도 점수 산식 추가
-        String breakdown = String.format(
-                "기본점수: %d\n" +
-                        "월세 가감: %+d (사용자 최대 %s vs 예상 %s~%s~%s)\n" +
-                        "보증금 가감: %+d (사용자 최대 %s vs 예상 %s~%s~%s)\n" +
-                        "점수 비중: 월세×70%% / 보증금×30%%\n" +
-                        "최종점수: %d",
-                base,
-                rentDelta, String.format("%,d만원", rentMaxMan), wonToManStr(expRentMin), wonToManStr(expRentMid), wonToManStr(expRentMax),
-                depoDelta, String.format("%,d만원", depoMaxMan), wonToManStr(expDepoMin), wonToManStr(expDepoMid), wonToManStr(expDepoMax),
-                score
+        // 가중치 적용된 점수가 들어감
+        List<AnalysisResponse.AdjusmentItem> penalties = new ArrayList<>();
+        List<AnalysisResponse.AdjusmentItem> bonuses   = new ArrayList<>();
+
+        if (rentDelta < 0) penalties.add(new AnalysisResponse.AdjusmentItem("월세 예산 부족", rentWeighted));
+        else if (rentDelta > 0) bonuses.add(new AnalysisResponse.AdjusmentItem("월세 예산 여유", rentWeighted));
+
+        if (depoDelta < 0) penalties.add(new AnalysisResponse.AdjusmentItem("보증금 예산 부족", depoWeighted));
+        else if (depoDelta > 0) bonuses.add(new AnalysisResponse.AdjusmentItem("보증금 예산 여유", depoWeighted));
+
+        AnalysisResponse.ExpectedPrice expectedPrice = new AnalysisResponse.ExpectedPrice(
+                (int) expRentMid, (int) expDepoMid
         );
 
-        String reason = summary + "\n\n— 점수 산식 —\n" + breakdown;
-        return new AnalysisResponse.ScoreInfo("예산 적합성", score, null, reason);
+        return new AnalysisResponse.ScoreInfo(
+                "예산 적합성", score, expectedPrice, summary, penalties, bonuses
+        );
     }
 
     /**
@@ -669,6 +723,11 @@ public class AnalysisService {
     private String safeLine(String s) {
         if (s == null) return "";
         return s.replace("\n", " ").replace("\r", " ").replace("\t", " ").trim();
+    }
+
+    // 감점/가점 항목 포맷 만들기 헬퍼
+    private AnalysisResponse.AdjusmentItem adj(String label, int points) {
+        return new AnalysisResponse.AdjusmentItem(label, points);
     }
 
     // ==================================== 상세분석 관련 로직 =========================================
