@@ -1,4 +1,4 @@
-package likelion.controller.dto;
+package likelion.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

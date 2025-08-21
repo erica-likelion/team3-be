@@ -1,4 +1,4 @@
-package likelion.service.dto;
+package likelion.dto;
 
 import java.util.List;
 

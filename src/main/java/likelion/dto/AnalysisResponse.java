@@ -1,4 +1,4 @@
-package likelion.controller.dto;
+package likelion.dto;
 
 import java.util.List;
 import com.fasterxml.jackson.annotation.JsonInclude;

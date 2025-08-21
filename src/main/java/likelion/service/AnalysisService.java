@@ -1,8 +1,8 @@
 package likelion.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import likelion.controller.dto.AnalysisRequest;
-import likelion.controller.dto.AnalysisResponse;
+import likelion.dto.AnalysisRequest;
+import likelion.dto.AnalysisResponse;
 import likelion.domain.entity.Restaurant;
 import likelion.domain.entity.Review;
 import likelion.repository.RestaurantRepository;

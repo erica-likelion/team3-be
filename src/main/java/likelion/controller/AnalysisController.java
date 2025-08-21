@@ -1,8 +1,8 @@
 package likelion.controller;
 
 import jakarta.validation.Valid;
-import likelion.controller.dto.AnalysisRequest;
-import likelion.controller.dto.AnalysisResponse;
+import likelion.dto.AnalysisRequest;
+import likelion.dto.AnalysisResponse;
 import likelion.service.AnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,7 +29,7 @@ public class AnalysisController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "성공",
                     content = @Content(mediaType = "application/json",
-                            schema = @Schema(implementation = likelion.controller.dto.AnalysisResponse.class))),
+                            schema = @Schema(implementation = AnalysisResponse.class))),
             @ApiResponse(responseCode = "400", description = "잘못된 요청"),
             @ApiResponse(responseCode = "500", description = "서버 오류")
     })
@@ -38,7 +38,7 @@ public class AnalysisController {
                     required = true,
                     content = @Content(
                             mediaType = "application/json",
-                            schema = @Schema(implementation = likelion.controller.dto.AnalysisRequest.class),
+                            schema = @Schema(implementation = AnalysisRequest.class),
                             examples = {
                                     @ExampleObject(
                                             name = "대학가-카페 예시",
