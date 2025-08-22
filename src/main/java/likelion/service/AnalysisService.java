@@ -487,17 +487,38 @@ public class AnalysisService {
 
         int base = 100, minScore = 10, maxScore = 100;
         int score = base + rentWeighted + depoWeighted;
-        score = Math.max(minScore, Math.min(maxScore, score));
 
-        // ===== 줄글 reason (산식/숫자열 요약 X, 사람이 읽기 쉬운 설명만) =====
+        // 보증금/월세(중앙값으로) 비율을 안정성 가점(감점은 없이)
+        int ratioBonus = 0;
+        String ratioLine = "";
+        if (userRentMax > 0 && userDepoMax > 0) {
+            double months = userDepoMax / (double) userRentMax; // 보증금이 월세 몇 개월치인지
+            long monthsRounded = Math.round(months);
+
+            String bucket; // 설명용
+            if (months >= 6.0 && months <= 12.0) {
+                ratioBonus = 5;
+                bucket = "이상적 범위";
+            } else if ((months >= 3.0 && months <= 5.0) || (months >= 13.0 && months <= 18.0)) {
+                ratioBonus = 2;
+                bucket = "양호 범위";
+            } else {
+                ratioBonus = 0;
+                bucket = "주의 구간";
+            }
+            ratioLine = String.format("또한 입력 예산 기준 보증금은 월세의 약 %,d개월치로 %s에 해당합니다.", monthsRounded, bucket);
+            score += ratioBonus;
+        }
+
+        // 줄글 reason (산식/숫자열 요약 X, 사람이 읽기 쉬운 설명만)
         String summary = String.format(
                 "요청 층수 %s 기준 1평당 예상 단가는 보증금 %s/월세 %s입니다. " +
-                "희망 면적 %d~%d평을 적용하면 예상 월세 중앙값은 %s, 보증금 중앙값은 %s 수준으로 추정됩니다. " +
-                "입력 예산(월세 최대 %s, 보증금 최대 %s)을 고려할 때 월세·보증금 모두에서 예산 여유/부족 정도가 반영되며, " +
-                "최종 점수는 월세 70%%, 보증금 30%%의 가중치로 계산되었습니다.",
+                        "희망 면적 %d~%d평을 적용하면 예상 월세 중앙값은 %s, 보증금 중앙값은 %s 수준으로 추정됩니다. " +
+                        "입력 예산(월세 최대 %,d만원, 보증금 최대 %,d만원)을 고려할 때 월세·보증금 모두에서 예산 여유/부족 정도가 반영되며, " +
+                        "최종 점수는 월세 70%%, 보증금 30%%의 가중치로 계산되었습니다.%s%s",
                 floorKey, wonToManStr(fp.depositPerPy()), wonToManStr(fp.monthlyPerPy()),
                 sizeMin, sizeMax, wonToManStr(expRentMid), wonToManStr(expDepoMid),
-                String.format("%,d만원", rentMaxMan), String.format("%,d만원", depoMaxMan)
+                rentMaxMan, depoMaxMan, (ratioLine.isBlank() ? "" : " "), ratioLine
         );
 
         // 가중치 적용된 점수가 들어감
@@ -509,6 +530,11 @@ public class AnalysisService {
 
         if (depoDelta < 0) penalties.add(new AnalysisResponse.AdjusmentItem("보증금 예산 부족", depoWeighted));
         else if (depoDelta > 0) bonuses.add(new AnalysisResponse.AdjusmentItem("보증금 예산 여유", depoWeighted));
+
+        // 보증금/월세 안정성
+        if (ratioBonus > 0) {
+            bonuses.add(new AnalysisResponse.AdjusmentItem("보증금/월세 비율 안정성", ratioBonus));
+        }
 
         AnalysisResponse.ExpectedPrice expectedPrice = new AnalysisResponse.ExpectedPrice(
                 (int) expRentMid, (int) expDepoMid
