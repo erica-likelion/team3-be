@@ -9,13 +9,21 @@ public record AnalysisResponse(
 
         // 분석 상세보기를 위한 dto 추가
         DetailAnalysis detailAnalysis
+
 ) {
-    @JsonInclude(JsonInclude.Include.NON_NULL) // expectedPrice가 예산 적합성에만 쓰이는데 나머지는 null임. 그래서 null인 것들은 안 보여주기 위한 어노테이션
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ScoreInfo(
             String name,
             int score,
             ExpectedPrice expectedPrice,
-            String reason
+            String reason,
+            List<AdjusmentItem> penalties, // {감점 항목 : 점수} 리스트
+            List<AdjusmentItem> bonuses // {가점 항목들 : 점수} 리스트
+    ) {}
+
+    public record AdjusmentItem(
+            String label,
+            int points
     ) {}
 
     public record ExpectedPrice(
