@@ -51,7 +51,7 @@ public class AnalysisController {
                           "deposit": { "min": 2000, "max": 3000 },
                           "managementMethod": "홀 영업 위주",
                           "representativeMenuName": "아메리카노",
-                          "representativeMenuPrice": 5000,
+                          "representativeMenuPrice": 4000,
                           "size": { "min": 15, "max": 20 },
                           "height": "1"
                         }
