@@ -510,6 +510,9 @@ public class AnalysisService {
             score += ratioBonus;
         }
 
+        // 최종 점수 100점 안 넘어가게 하기
+        score = Math.max(minScore, Math.min(maxScore, score));
+
         // 줄글 reason (산식/숫자열 요약 X, 사람이 읽기 쉬운 설명만)
         String summary = String.format(
                 "요청 층수 %s 기준 1평당 예상 단가는 보증금 %s/월세 %s입니다. " +
