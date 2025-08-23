@@ -8,7 +8,7 @@ import lombok.Getter;
 public class RestaurantGeoDto {
     private String name;
     private String address;
-    private String lat;
-    private String lon;
+    private Double lat;
+    private Double lon;
     private String coord;
 }
