@@ -1,9 +1,12 @@
 package likelion.service;
 
 import likelion.domain.entity.Category;
+import likelion.domain.entity.Comment;
 import likelion.domain.entity.Post;
+import likelion.dto.CommentResponseDto;
 import likelion.dto.PostCreateRequestDto;
 import likelion.dto.PostResponseDto;
+import likelion.repository.CommentRepository;
 import likelion.repository.PostRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,6 +27,7 @@ import java.util.stream.Collectors;
 public class PostService {
 
     private final PostRepository postRepository;
+    private final CommentRepository commentRepository;
 
     //이미지 저장 경로
     //rivate final Path imageDir = Paths.get("images").toAbsolutePath();
@@ -92,7 +96,9 @@ public class PostService {
     public PostResponseDto findOne(Long id) {
         Post post = postRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid post ID: " + id));
-        return new PostResponseDto(post);
+        List<Comment> comments = post.getComments();
+        List<CommentResponseDto> commentResponseDtos = comments.stream().map(CommentResponseDto::new).collect(Collectors.toList());
+        return new PostResponseDto(post, commentResponseDtos);
     }
 
     //getExtension 메소드
