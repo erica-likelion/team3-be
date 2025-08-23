@@ -663,13 +663,13 @@ public class AnalysisService {
                 - For each item in "reviewSamples":
                   - Keep "storeName" as-is (가게명).
                   - "reviewScore" must be a number (0.0~5.0).
-                  - "highlights" must be **an array with exactly ONE sentence** (1줄 요약, 구어체로).
+                  - "highlights" must be **an array with exactly ONE sentence** (1줄 요약, 평어체로).
                     - **Remove emojis/repeat chars like ㅋㅋ/ㅎㅎ/ㅠㅠ, URLs, hashtags, @mentions.**
                     - Normalize spacing/punctuation.
                     - Keep it within **80 characters** and end with a period.
                 - In "feedback":
-                  - **Do not mention any store names**.
-                  - Provide **university-area–aware advice** (예: 학생 피크타임 운영, 가성비/포션, 회전율, 소음/분위기, 연령대·모임 수요 등).
+                  - **어떤 가게 이름도 언급하지마**.
+                  - 대학 상권을 기준으로 정보를 제공해줘** (예: 학생 피크타임 운영, 가성비/포션, 회전율, 소음/분위기, 연령대·모임 수요 등).
                   - 내가 준 모든 리뷰 내용을 고려하여 관련된 조언을 해주고(특히 reviewSamples에 나온 내용 관련해선 꼭 언급해줘).
                   - 한국인들의 친근감이 들 수 있게 친절한 상담사처럼 "~요"체로 말해줘.
                   - 내용이 너무 적으면 너가 서칭해서라도 관련 업계 팁을 최소 4줄 정도 채워줘.
@@ -680,7 +680,7 @@ public class AnalysisService {
                   "reviewSamples": [
                     {"storeName": "가게명", "reviewScore": 4.5, "highlights": ["한 줄 요약."]}
                   ],
-                  "feedback": "종합 피드백 (한국어)"
+                  "feedback": "종합 피드백"
                 }
                 
                 # Reviews
@@ -817,6 +817,7 @@ public class AnalysisService {
         - For each section, explain why the score likely came out that way,
           and give concrete, prioritized tips to raise the score.
         - Always consider it's a **university-area** (student traffic, peak hours, price sensitivity, group demand, quick turns).
+        - 말투는 너가 창업 상담사라고 생각하고 "~요"의 말투로 답변해줘.
 
         # Output rules (MUST):
         - **Write ALL output in Korean.**
@@ -824,13 +825,18 @@ public class AnalysisService {
         - Structure:
           {
             "sections": [
-              {"name": "접근성", "content": "문단 텍스트"},
-              {"name": "예산 적합성", "content": "문단 텍스트"},
-              {"name": "메뉴 적합성", "content": "문단 텍스트"}
+              {"name": "접근성", "content": "텍스트"},
+              {"name": "예산 적합성", "content": "텍스트"},
+              {"name": "메뉴 적합성", "content": "텍스트"}
             ]
           }
-        - Content should be concise but practical, with quick wins(단기), mid-term(중기), risk watch-outs(리스크)을 포함해도 좋음.
-        - Do **not** mention any specific competitor store names.
+          
+          ******** 다음 항목들은 무조건 지켜줘 (중요!) ********
+        - "접근성", "예산 적합성", "메뉴 적합성" 모두 단기, 중기, 장기, 리스크에 대한 모든 내용을 꼭 포함해줘.
+        - 상세 분석이니만큼, 위에서 말했듯이 각 점수가 나온 이유를 자세히 설명해줘
+        - "접근성", "예산 적합성", "메뉴 적합성" 각 항목에 있어서 너가 줄 수 있는 다양한 분석을 최대한 길고 자세하게 써줘.(각각 300자 이상)
+        - 각 항목에서 내가 준 자료 말고도 너가 줄 수 있는 "대학가에서의 특징"을 살려서 상세 분석 내용 추가해줘
+        - 경쟁업체의 이름을 절대 언급하지마
 
         [User Inputs]
         %s
