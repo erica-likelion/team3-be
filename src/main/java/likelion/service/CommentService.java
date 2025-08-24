@@ -37,6 +37,9 @@ public class CommentService {
         // 엔티티 생성. userName이랑 createdAt은 엔티티에서 세팅함
         Comment comment = Comment.builder().post(post).content(content).build();
 
+        post.setCommentCount(post.getCommentCount() + 1);
+        postRepository.saveAndFlush(post);
+
         Comment saved = commentRepository.save(comment);
         return new CommentResponseDto(saved);
     }

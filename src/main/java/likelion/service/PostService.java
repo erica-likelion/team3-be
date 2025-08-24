@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -88,7 +89,7 @@ public class PostService {
 
     @Transactional(readOnly = true)
     public List<PostResponseDto> findAll() {
-        return postRepository.findAll().stream()
+        return postRepository.findAllByOrderByCommentCountDescIdDesc().stream()
                 .map(PostResponseDto::new)
                 .collect(Collectors.toList());
     }
