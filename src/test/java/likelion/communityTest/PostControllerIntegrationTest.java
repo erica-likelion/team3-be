@@ -44,8 +44,8 @@ public class PostControllerIntegrationTest {
     @BeforeEach
     void setUp() {
         postRepository.deleteAll();
-        postRepository.save(Post.builder().title("제목 1").content("내용 1").userName("작성자1").category(Category.GENERAL).build());
-        postRepository.save(Post.builder().title("제목 2").content("내용 2").userName("작성자2").category(Category.PARTNERSHIP).build());
+        postRepository.save(Post.builder().title("제목 1").content("내용 1").category(Category.GENERAL).build());
+        postRepository.save(Post.builder().title("제목 2").content("내용 2").category(Category.PARTNERSHIP).build());
     }
 
     @AfterEach
@@ -68,7 +68,6 @@ public class PostControllerIntegrationTest {
         PostCreateRequestDto dto = new PostCreateRequestDto();
         dto.setTitle("테스트 제목");
         dto.setContent("테스트 내용");
-        dto.setUserName("홍길동");
         dto.setCategory(Category.GENERAL);
 
         MockMultipartFile jsonDto = new MockMultipartFile(
@@ -98,7 +97,6 @@ public class PostControllerIntegrationTest {
         PostCreateRequestDto dto = new PostCreateRequestDto();
         dto.setTitle("이미지 없음");
         dto.setContent("본문");
-        dto.setUserName("무명");
         dto.setCategory(Category.PARTNERSHIP);
 
         MockMultipartFile jsonDto = new MockMultipartFile(

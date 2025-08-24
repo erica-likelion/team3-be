@@ -36,7 +36,6 @@ public class DeploymentProfileTest {
         PostCreateRequestDto dto = new PostCreateRequestDto();
         dto.setTitle("배포 설정 테스트");
         dto.setContent("내용");
-        dto.setUserName("테스터");
         dto.setCategory(Category.GENERAL);
 
         MockMultipartFile jsonDto = new MockMultipartFile(
