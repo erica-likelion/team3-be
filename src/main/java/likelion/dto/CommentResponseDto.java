@@ -11,14 +11,12 @@ import java.time.LocalDateTime;
 public class CommentResponseDto {
     private final Long id;
     private final Long postId;
-    private final String userName;
     private final String content;
     private final LocalDateTime createdAt;
 
     public CommentResponseDto(Comment c) {
         this.id = c.getId();
         this.postId = c.getPost().getId();
-        this.userName = c.getUserName(); // 익명 디폴트
         this.content = c.getContent();
         this.createdAt = c.getCreated_at();
     }

@@ -3,6 +3,7 @@ package likelion.service;
 import likelion.domain.entity.Category;
 import likelion.domain.entity.Comment;
 import likelion.domain.entity.Post;
+import likelion.domain.entity.StoreCategory;
 import likelion.dto.CommentResponseDto;
 import likelion.dto.PostCreateRequestDto;
 import likelion.dto.PostResponseDto;
@@ -39,7 +40,6 @@ public class PostService {
         return Paths.get(uploadDir).toAbsolutePath();
     }
 
-    //게시글 생성
     @Transactional
     public Long createPost(PostCreateRequestDto req, MultipartFile image) throws IOException {
         if (req.getTitle() == null || req.getTitle().isBlank()) {
@@ -48,39 +48,40 @@ public class PostService {
         if (req.getContent() == null || req.getContent().isBlank()) {
             throw new IllegalArgumentException("content는 필수입니다.");
         }
-        if (req.getUserName() == null || req.getUserName().isBlank()) {
-            throw new IllegalArgumentException("userName은 필수입니다.");
-        }
 
         Category category = (req.getCategory() == null) ? Category.GENERAL : req.getCategory();
+
+        Post.PostBuilder postBuilder = Post.builder()
+                .title(req.getTitle())
+                .content(req.getContent())
+                .category(category);
+
+        if (category == Category.PARTNERSHIP) {
+            if (req.getMyStoreCategory() == null || req.getPartnerStoreCategory() == null) {
+                throw new IllegalArgumentException("PARTNERSHIP 카테고리에는 myStoreCategory와 partnerStoreCategory가 필수입니다.");
+            }
+            postBuilder.myStoreCategory(StoreCategory.valueOf(req.getMyStoreCategory()));
+            postBuilder.partnerStoreCategory(StoreCategory.valueOf(req.getPartnerStoreCategory()));
+        }
 
         /**
          * 이미지 처리로직
          */
-        // 디렉토리 보장
-        //Files.createDirectories(imageDir());
-
         String imageUrl = null;
         if (image != null && !image.isEmpty()) {
-            String originalName = image.getOriginalFilename(); // 원본 파일명 (null 가능)
-            String extension = getExtension(originalName);     // png, jpg, ...
+            String originalName = image.getOriginalFilename();
+            String extension = getExtension(originalName);
             String savedFileName = UUID.randomUUID() + (extension.isEmpty() ? "" : "." + extension);
 
             Path savedPath = imageDir().resolve(savedFileName);
             image.transferTo(savedPath.toFile());
 
-            // 정적 리소스 매핑 기준 URL ("/image" → "/images/..." 로 수정)
             imageUrl = "/images/" + savedFileName;
         }
 
-        Post post = Post.builder()
-                .userName(req.getUserName())
-                .title(req.getTitle())
-                .content(req.getContent())
-                .category(category)
-                .imageUrl(imageUrl)
-                .build();
+        postBuilder.imageUrl(imageUrl);
 
+        Post post = postBuilder.build();
         Post saved = postRepository.save(post);
         return saved.getId();
     }
