@@ -20,9 +20,6 @@ public class Post {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "user_name", nullable = false)
-    private String userName;
-
     @Column(name = "title", nullable = false)
     private String title;
 
@@ -37,6 +34,14 @@ public class Post {
 
     @Column(name = "image_url")
     private String imageUrl;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "my_store_category")
+    private StoreCategory myStoreCategory;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "partner_store_category")
+    private StoreCategory partnerStoreCategory;
 
     @OneToMany(mappedBy = "post", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("id asc")

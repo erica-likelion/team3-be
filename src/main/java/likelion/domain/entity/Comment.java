@@ -24,9 +24,6 @@ public class Comment {
     )
     private Post post; // FK: comment.post_id
 
-    @Column(name = "user_name", nullable = false, updatable = false)
-    private String userName;
-
     @Column(name = "content", nullable = false, length = 500)
     private String content;
 
@@ -37,8 +34,6 @@ public class Comment {
     // 생성 시 기본값 세팅
     @PrePersist
     void onCreate() {
-        // 무조건 "익명"으로 고정
-        this.userName = "익명";
         this.created_at = LocalDateTime.now();
     }
 }
