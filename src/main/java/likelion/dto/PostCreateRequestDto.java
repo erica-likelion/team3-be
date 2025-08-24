@@ -15,8 +15,13 @@ public class PostCreateRequestDto {
 
     private String title;
     private String content;
-    private String userName;
 
     @Schema(description = "GENERAL or PARTNERSHIP")
     private Category category; //자유 or 제휴
+
+    @Schema(description = "내 업종 카테고리")
+    private String myStoreCategory;
+
+    @Schema(description = "제휴할 업종 카테고리")
+    private String partnerStoreCategory;
 }
