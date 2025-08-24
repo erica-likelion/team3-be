@@ -18,6 +18,7 @@ public class PostResponseDto {
     private final String imageUrl;
     private final String myStoreCategory;
     private final String partnerStoreCategory;
+    private final Integer commentCount;
     private List<CommentResponseDto> comments;
 
     public PostResponseDto(Post post) {
@@ -29,6 +30,7 @@ public class PostResponseDto {
         this.imageUrl = post.getImageUrl();
         this.myStoreCategory = post.getMyStoreCategory() != null ? post.getMyStoreCategory().getDisplayName() : null;
         this.partnerStoreCategory = post.getPartnerStoreCategory() != null ? post.getPartnerStoreCategory().getDisplayName() : null;
+        this.commentCount = post.getCommentCount();
     }
 
     public PostResponseDto(Post post, List<CommentResponseDto> comments) {
@@ -40,6 +42,7 @@ public class PostResponseDto {
         this.imageUrl = post.getImageUrl();
         this.myStoreCategory = post.getMyStoreCategory() != null ? post.getMyStoreCategory().getDisplayName() : null;
         this.partnerStoreCategory = post.getPartnerStoreCategory() != null ? post.getPartnerStoreCategory().getDisplayName() : null;
+        this.commentCount = post.getCommentCount();
         this.comments = comments;
     }
 }
