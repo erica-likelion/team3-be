@@ -4,10 +4,11 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
 import lombok.Setter;
 
 @Schema(description = "댓글 작성 요청")
-@Getter @Setter @NoArgsConstructor
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor
 public class CommentRequestDto {
 
     @Schema(description = "댓글 내용", example = "댓글내용 댓글내용 예시 예시")

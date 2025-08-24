@@ -47,6 +47,10 @@ public class Post {
     @OrderBy("id asc")
     private List<Comment> comments;
 
+    @Column(name = "comment_count", nullable = false)
+    @Builder.Default
+    private Integer commentCount = 0;
+
     //타임스탬프 설정
     @PrePersist
     protected void onCreate(){
