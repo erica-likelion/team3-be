@@ -1,5 +1,6 @@
 package likelion.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import likelion.domain.entity.Category;
 import likelion.domain.entity.Post;
 import lombok.Getter;
@@ -13,6 +14,8 @@ public class PostResponseDto {
     private final Long id;
     private final String title;
     private final String content;
+
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Seoul")
     private final LocalDateTime createdAt;
     private final Category category;
     private final String imageUrl;

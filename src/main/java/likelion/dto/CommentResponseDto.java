@@ -1,5 +1,6 @@
 package likelion.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.media.Schema;
 import likelion.domain.entity.Comment;
 import lombok.Getter;
@@ -12,6 +13,8 @@ public class CommentResponseDto {
     private final Long id;
     private final Long postId;
     private final String content;
+
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Seoul")
     private final LocalDateTime createdAt;
 
     public CommentResponseDto(Comment c) {
