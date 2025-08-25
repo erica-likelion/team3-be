@@ -102,13 +102,13 @@ public class AnalysisService {
 
         double distance = DistanceCalc.calculateDistance(latitude, longitude, ERICA_MAIN_GATE_LAT, ERICA_MAIN_GATE_LON);
 
-        // 거리 가감점: ≤30m +3, 30~50m 0, >50m 10m당 -3
+        // 거리 가감점: ≤80m +3, 80~130m 0, >130m 10m당 -3
         int distanceBonus = 0;
         int distancePenalty = 0;
-        if (distance <= 30) {
+        if (distance <= 80) {
             distanceBonus = 3;
-        } else if (distance > 50) {
-            distancePenalty = (int) Math.ceil((distance - 50) / 10.0) * 3;
+        } else if (distance > 130) {
+            distancePenalty = (int) Math.ceil((distance - 130) / 10.0) * 3;
         }
 
         // 층수: 1층 +5, 2층부터 -7/층, 지하는 층당 -10
@@ -178,12 +178,12 @@ public class AnalysisService {
     private String generateLocationReason(double distance, int floor, long competitorCount, List<String> competitorNamesWithDist) {
         StringBuilder sb = new StringBuilder();
 
-        // 거리 (≤30m 가점, 30~50m 중립, 50m 넘으면 10m당 감점)
-        if (distance <= 30) {
+        // 거리 (≤80m 가점, 80~130m 중립, 130m 넘으면 10m당 3점 감점)
+        if (distance <= 80) {
             sb.append(String.format("정문과 매우 가까워(약 %.0fm) 접근성이 우수합니다. ", distance));
-        } else if (distance <= 50) {
+        } else if (distance <= 130) {
             sb.append(String.format("정문과 가까운 편(약 %.0fm)으로 접근성이 양호합니다. ", distance));
-        } else if (distance <= 70) {
+        } else if (distance <= 160) {
             sb.append(String.format("정문과 다소 떨어져 있어(약 %.0fm) 접근성이 떨어질 수 있습니다. ", distance));
         } else {
             sb.append(String.format("정문과 거리가 있어(약 %.0fm) 접근성이 제한적일 수 있습니다. ", distance));
