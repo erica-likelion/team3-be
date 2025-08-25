@@ -110,7 +110,11 @@ public class AnalysisService {
             distanceBonus = 3;
         } else if (distance > 130) {
             distancePenalty = (int) Math.ceil((distance - 130) / 10.0) * 3;
+            if (distancePenalty > 50) {
+                distancePenalty = 50;
+            }
         }
+
 
         // 층수: 1층 +5, 2층부터 -7/층, 지하는 층당 -10
         int floor = request.height() != null ? request.height() : 1;
